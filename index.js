@@ -56,9 +56,9 @@ var server = gps.server(options, function (device, connection) {
     console.log("UT04S RAW DATA EMITTED UTF8 : " + data.toString("utf8"));
 
     console.log("size of a buffer (in bytes) : " + data.length);
-    let packetLen = new Uint16Array(data, 0);
+    let packetLen = new Uint16Array(data, 0, 2);
 
-    let cmd = new Uint16Array(data, 2);
+    let cmd = new Uint16Array(data, 2, 2);
 
     console.log("packetLen : ");
     console.log(packetLen);
