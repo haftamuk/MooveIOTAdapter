@@ -85,9 +85,9 @@ var server = gps.server(options, function (device, connection) {
       // const buf = new Buffer(data);
 
 
-    let packetLen = new Uint16Array(data.buffer, 0, 2);
+    let packetLen = new Uint16Array(data.buffer, 0, 1);
 
-    let cmd = new Uint16Array(data.buffer, 2, 2);
+    let cmd = new Uint16Array(data.buffer, 2, 1);
 
     console.log("packetLen : ");
     console.log(packetLen);
