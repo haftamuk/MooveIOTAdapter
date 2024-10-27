@@ -2,6 +2,7 @@ import net from "net";
 
 import gps from "gps-tracking";
 import BinaryStream from "@jsprismarine/jsbinaryutils";
+import { isUint16Array, isUint32Array, isUint8Array } from "util/types";
 
 var options = {
   debug: true, //We don't want to debug info automatically. We are going to log everything manually so you can check what happens everywhere
@@ -56,17 +57,41 @@ var server = gps.server(options, function (device, connection) {
     console.log("UT04S RAW DATA EMITTED UTF8 : " + data.toString("utf8"));
 
     console.log("size of a buffer (in bytes) : " + data.length);
+
+    const stream = new BinaryStream(data.slice(2));
+    console.log("SLICE AT 4 : ");
+    console.log(data.slice(2).toString("hex"));
+
+    console.log("CMD TYPE UT04S");
+
+    // console.log(stream.read(data.length));
+
+    console.log(stream.readUnsignedShortLE());
+
+    console.log("======================================");
+
+    isUint16Array(data)
+      ? console.log("isUint16Array")
+      : console.log("NOT isUint16Array");
+
+    isUint32Array(data)
+      ? console.log("isUint32Array")
+      : console.log("NOT isUint32Array");
+
+    isUint8Array(data)
+      ? console.log("isUint8Array")
+      : console.log("NOT isUint8Array");
+
+      
     let packetLen = new Uint16Array(data, 0, 2);
 
-    let cmd = new Uint16Array(data, 2, 2);
+    let cmd = new Uint16Array(data.slice(2), 2);
 
     console.log("packetLen : ");
     console.log(packetLen);
 
     console.log("cmd : ");
     console.log(cmd);
-
-    console.log("======================================");
 
     // console.log("Connection Obj: " + Object.toString(connection));
   });
