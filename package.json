@@ -1,6 +1,7 @@
 {
   "name": "um552",
   "version": "1.0.0",
+  "type": "module",
   "description": "UM552",
   "main": "index.js",
   "scripts": {
@@ -9,6 +10,7 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "@jsprismarine/jsbinaryutils": "^5.5.3",
     "@logtail/pino": "^0.4.22",
     "crc": "^4.3.2",
     "gps-tracking": "^1.1.1",
