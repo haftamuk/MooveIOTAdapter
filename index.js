@@ -48,7 +48,9 @@ var server = gps.server(options, function (device, connection) {
     console.log("size of a buffer (in bytes) : " + data.length);
 
     const stream = new BinaryStream(Buffer.from(data));
-    console.log("CMD TYPE UT04S : " + stream.read(data.length));
+    console.log("CMD TYPE UT04S");
+
+    console.log(stream.read(data.length));
 
     console.log("======================================");
 
