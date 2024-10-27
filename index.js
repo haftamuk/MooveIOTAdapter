@@ -50,7 +50,7 @@ var server = gps.server(options, function (device, connection) {
     const stream = new BinaryStream(Buffer.from(data));
     console.log("CMD TYPE UT04S");
 
-    console.log(stream.read(data.length));
+    // console.log(stream.read(data.length));
 
     console.log(stream.readUnsignedShortLE());
 
