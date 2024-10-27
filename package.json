@@ -1,0 +1,17 @@
+{
+  "name": "um552",
+  "version": "1.0.0",
+  "description": "UM552",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@logtail/pino": "^0.4.22",
+    "crc": "^4.3.2",
+    "gps-tracking": "^1.1.1",
+    "pino": "^9.3.2"
+  }
+}
