@@ -9,6 +9,16 @@ var options = {
   device_adapter: "GT06",
 };
 
+const MSG_UPLOAD_POSITION = 0x0008;
+const MSG_UPLOAD_POSITION_NEW = 0x0032;
+const MSG_CONTROL = 0x0002;
+const MSG_CONTROL_RESPONSE = 0x8009;
+const MSG_ALARM = 0x0003;
+const MSG_SHAKE_HAND = 0x0000;
+const MSG_SHAKE_HAND_RESPONSE = 0x8000;
+const MSG_IMAGE_SIZE = 0x0200;
+const MSG_IMAGE_PACKET = 0x0201;
+
 /**
  * packetLen
  * Message_Head
@@ -42,22 +52,21 @@ var server = gps.server(options, function (device, connection) {
   connection.on("data", function (data) {
     //echo raw data package
     console.log("======================================");
-    console.log("UT04S RAW DATA EMITTED HEX : " + data.toString('hex'));
-    console.log("UT04S RAW DATA EMITTED UTF8 : " + data.toString('utf8'));
+    console.log("UT04S RAW DATA EMITTED HEX : " + data.toString("hex"));
+    console.log("UT04S RAW DATA EMITTED UTF8 : " + data.toString("utf8"));
 
     console.log("size of a buffer (in bytes) : " + data.length);
+    let packetLen = new Uint16Array(data, 0);
 
-    const stream = new BinaryStream(data.slice(2));
-    console.log("SLICE AT 4 : ");
-    console.log(data.slice(2).toString('hex'));
+    let cmd = new Uint16Array(data, 2);
 
-    console.log("CMD TYPE UT04S");
+    console.log("packetLen : ");
+    console.log(packetLen);
 
-    // console.log(stream.read(data.length));
+    console.log("cmd : ");
+    console.log(cmd);
 
-    console.log(stream.readUnsignedShortLE());
-
-            console.log("======================================");
+    console.log("======================================");
 
     // console.log("Connection Obj: " + Object.toString(connection));
   });
