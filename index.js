@@ -57,10 +57,7 @@ var server = gps.server(options, function (device, connection) {
 
     console.log(stream.readUnsignedShortLE());
 
-    7e01
-    0200
-    0602
-    02081740490af8020208174049f77e
+
             console.log("======================================");
 
     // console.log("Connection Obj: " + Object.toString(connection));
