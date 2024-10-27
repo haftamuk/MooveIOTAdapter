@@ -82,7 +82,6 @@ var server = gps.server(options, function (device, connection) {
       ? console.log("isUint8Array")
       : console.log("NOT isUint8Array");
 
-      
     let packetLen = new Uint16Array(data, 0, 2);
 
     let cmd = new Uint16Array(data.slice(2), 2);
@@ -92,6 +91,9 @@ var server = gps.server(options, function (device, connection) {
 
     console.log("cmd : ");
     console.log(cmd);
+
+    let cmd8 = new Uint8Array(data.slice(2), 2);
+    console.log(cmd8);
 
     // console.log("Connection Obj: " + Object.toString(connection));
   });
