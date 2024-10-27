@@ -52,7 +52,10 @@ var server = gps.server(options, function (device, connection) {
 
     console.log(stream.read(data.length));
 
-    console.log("======================================");
+    console.log(stream.readUnsignedShortLE());
+
+
+        console.log("======================================");
 
     // console.log("Connection Obj: " + Object.toString(connection));
   });
