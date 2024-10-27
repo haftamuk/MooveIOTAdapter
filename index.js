@@ -3,6 +3,7 @@ import net from "net";
 import gps from "gps-tracking";
 import BinaryStream from "@jsprismarine/jsbinaryutils";
 import { isUint16Array, isUint32Array, isUint8Array } from "util/types";
+import BitConverter from "bit-converter";
 
 var options = {
   debug: true, //We don't want to debug info automatically. We are going to log everything manually so you can check what happens everywhere
@@ -82,8 +83,7 @@ var server = gps.server(options, function (device, connection) {
       ? console.log("isUint8Array")
       : console.log("NOT isUint8Array");
 
-      // const buf = new Buffer(data);
-
+    // const buf = new Buffer(data);
 
     let packetLen = new Uint16Array(data.buffer, 0, 1);
 
@@ -95,6 +95,14 @@ var server = gps.server(options, function (device, connection) {
     console.log("cmd : ");
     console.log(cmd);
 
+    const a = BitConverter.toShort([0xff, 0xff]);
+
+    console.log(a); // -1
+
+    //Starting index for the array = 1
+    const b = BitConverter.toShort([0, 0xff, 0xff], 1);
+
+    console.log(b); // -1
 
     // console.log("Connection Obj: " + Object.toString(connection));
   });
