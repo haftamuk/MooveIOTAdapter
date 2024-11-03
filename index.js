@@ -27,7 +27,7 @@ var server = gps.server(options, function (device, connection) {
         device_id
     );
 
-    this.login_authorized(true);
+    this.login_authorized(true, msg_parts);
 
     console.log("Ok, " + device_id + ", you're accepted!");
   });
