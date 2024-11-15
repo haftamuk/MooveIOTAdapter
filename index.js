@@ -65,6 +65,40 @@ var server = gps.server(options, function (device, connection) {
     );
     this.received_location_report(msg_parts);
 
+    /**
+     * #######################################################################
+     * ########## SENDING LOCATION INFORMATION TO SERVER ######################
+     * {
+     *   alarm_mask: '00000000',
+     *   status: '00000002',
+     *   latitude: 13.486583,
+     *   longitude: 39.4528,
+     *   height: 7,
+     *   speed: 16,
+     *   direction: 0,
+     *   date: 2024-11-15T21:47:35.000Z,
+     *   orientation: '',
+     *   io_state: '',
+     *   mile_post: '',
+     *   mile_data: '',
+     *   availability: ''
+     * }
+     * #######################################################################
+     */
+    fetch(`http://78.47.144.132:3000/api/GPSLocationFeed`, {
+      method: "POST",
+      mode: "cors",
+      body: JSON.stringify({ data: data }),
+      headers: {
+        "Content-Type": "application/json; charset=UTF-8",
+      },
+    })
+      .then((response) => response.json())
+      .then((data) => console.log("MooveLocation Returned Data : ", data));
+    /**
+     * #######################################################################
+     */
+
     //Look what informations the device sends to you (maybe velocity, gas level, etc)
     //console.log(data);
     return data;
