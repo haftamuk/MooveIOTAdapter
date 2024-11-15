@@ -93,8 +93,15 @@ var server = gps.server(options, function (device, connection) {
         "Content-Type": "application/json; charset=UTF-8",
       },
     })
-      .then((response) => response.json())
-      .then((data) => console.log("MooveLocation Returned Data : ", data))
+      .then((response) => {
+        console.log("MooveLocation Returned RAW response : ");
+        console.log(response);
+        return response.json();
+      })
+      .then((data) => {
+        console.log("MooveLocation Returned FORMATTED Data : ");
+        console.log(data);
+      })
       .catch((err) => {
         console.log("ERROR SENDING TO MOOVE LOCATION PLATFORM");
         console.log(err);
