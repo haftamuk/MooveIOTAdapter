@@ -88,7 +88,7 @@ var server = gps.server(options, function (device, connection) {
     fetch(`http://78.47.144.132:3000/api/GPSLocationFeed`, {
       method: "POST",
       mode: "cors",
-      body: JSON.stringify(data),
+      body: JSON.stringify({ data: data }),
       headers: {
         "Content-Type": "application/json; charset=UTF-8",
       },
