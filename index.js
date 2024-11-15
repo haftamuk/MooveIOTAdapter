@@ -100,6 +100,8 @@ var server = gps.server(options, function (device, connection) {
         console.log(err);
         console.log("data OBJECT");
         console.log(data);
+        console.log("JSON.stringify({ data: data })");
+        console.log(JSON.stringify({ data: data }));
       });
     /**
      * #######################################################################
