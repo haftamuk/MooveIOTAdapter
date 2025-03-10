@@ -11,11 +11,49 @@ var options = {
   device_adapter: "UT04S",
 };
 
+const crsTerminals = [
+  "020201228393"
+];
+
 /***
  * https://stackoverflow.com/questions/38931866/convert-gps-position-from-double-value
  */
 
 var server = gps.server(options, function (device, connection) {
+  // #######################################################################################################################
+  // ################################################# CRS ONLY ############################################################
+  // #######################################################################################################################
+  let client = new net.Socket();
+  let is_proxy_CRS_device = false;
+  try {
+    client.connect(22422, "193.193.165.165", function () {
+      console.log(
+        "=========================================================================="
+      );
+      console.log("CRS- Connected "); // acknowledge socket connection
+      console.log(
+        "=========================================================================="
+      );
+
+      console.log("CRS - CONNECTED.");
+    });
+    console.log("CRS - DEVICE Connected "); // acknowledge socket connection
+  } catch (error) {
+    console.log("CRS - ERROR : " + error.message);
+    console.log(
+      "=========================================================================="
+    );
+    console.log("CRS - ERROR : " + error.message);
+    console.log(
+      "=========================================================================="
+    );
+  }
+
+  client.on("error", (err) => {
+    console.log("CRS - Error Connecting : " + err.message);
+    console.log("CRS - Error Connecting : " + err.message);
+  });
+
   device.on("connected", function (data) {
     console.log("I'm a new ut04s device connected");
     return data;
@@ -38,6 +76,8 @@ var server = gps.server(options, function (device, connection) {
     this.new_device_register(msg_parts);
   });
   device.on("login_request", function (device_id, msg_parts) {
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
+
     console.log(
       "Hey! I want to start transmiting my position. Please accept me. My name is " +
         device_id
@@ -131,8 +171,27 @@ var server = gps.server(options, function (device, connection) {
 
   //Also, you can listen on the native connection object
   connection.on("data", function (data) {
-    //echo raw data package
-    console.log("======================================");
-    console.log("UT04S RAW DATA HEX : " + data.toString("hex"));
+    if (is_proxy_CRS_device) {
+      //echo raw data package
+      console.log("=================================");
+      console.log(
+        "UT04S CRS - RAW DATA emitted : IMEI - " + bufferToHexString(data)
+      );
+      console.log("==================================================");
+      client.write(data)
+        ? console.log(
+            "UT04S - Data Written to CRS server : " + bufferToHexString(data)
+          )
+        : console.log(
+            "UT04S - NOT Written to CRS server : " + bufferToHexString(data)
+          );
+      console.log("=================================");
+    } else {
+      //echo raw data package
+      console.log("========================================");
+      console.log("UT04S RAW DATA HEX : " + data.toString("hex"));
+
+      console.log("===========================================");
+    }
   });
 });
