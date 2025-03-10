@@ -54,6 +54,19 @@ var server = gps.server(options, function (device, connection) {
     console.log("CRS - Error Connecting : " + err.message);
   });
 
+  function bufferToHexString(buffer) {
+    var str = "";
+    for (var i = 0; i < buffer.length; i++) {
+      if (buffer[i] < 16) {
+        str += "0";
+      }
+      str += buffer[i].toString(16);
+    }
+
+    console.log("bufferToHexString : ", str);
+    return str;
+  }
+  
   device.on("connected", function (data) {
     console.log("I'm a new ut04s device connected");
     return data;
