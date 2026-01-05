@@ -10,7 +10,8 @@ var options = {
 };
 
 const crsTerminals = [
-  "020201228393"
+  "020201228393",
+  "020201232938"
 ];
 
 
@@ -248,5 +249,3 @@ process.on('SIGINT', function() {
   console.log("\nGracefully shutting down from SIGINT (Ctrl-C)");
   process.exit(0);
 });
-
-module.exports = server;
