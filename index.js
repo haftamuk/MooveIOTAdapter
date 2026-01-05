@@ -1,12 +1,10 @@
+// File: UT04SAdapter/index.js
 import net from "net";
 
 import gps from "gps-tracking";
-// import BinaryStream from "@jsprismarine/jsbinaryutils";
-// import { isUint16Array, isUint32Array, isUint8Array } from "util/types";
-// import BitConverter from "bit-converter";
 
 var options = {
-  debug: true, //We don't want to debug info automatically. We are going to log everything manually so you can check what happens everywhere
+  debug: true,
   port: 8800,
   device_adapter: "UT04S",
 };
@@ -15,9 +13,6 @@ const crsTerminals = [
   "020201228393"
 ];
 
-/***
- * https://stackoverflow.com/questions/38931866/convert-gps-position-from-double-value
- */
 
 var server = gps.server(options, function (device, connection) {
   // #######################################################################################################################
@@ -53,158 +48,205 @@ var server = gps.server(options, function (device, connection) {
     console.log("CRS - Error Connecting : " + err.message);
     console.log("CRS - Error Connecting : " + err.message);
   });
-
-  function bufferToHexString(buffer) {
-    var str = "";
-    for (var i = 0; i < buffer.length; i++) {
-      if (buffer[i] < 16) {
-        str += "0";
-      }
-      str += buffer[i].toString(16);
-    }
-
-    console.log("bufferToHexString : ", str);
-    return str;
-  }
   
+  console.log("========================================");
+  console.log("UT04S ADAPTER INITIALIZED");
+  console.log("Listening on port:", options.port);
+  console.log("========================================");
+  
+  // 1. Device Connected Event
   device.on("connected", function (data) {
-    console.log("I'm a new ut04s device connected");
+    console.log("========================================");
+    console.log("DEVICE CONNECTED");
+    console.log("Remote IP:", connection.remoteAddress);
+    console.log("========================================");
+    is_proxy_CRS_device = crsTerminals.includes(device.getUID());
+
     return data;
   });
-  device.on("new_device_first_time", function (device_id, msg_parts) {
-    console.log("NEW DEVICE EVER DETECTED: " + device_id);
 
-    this.receive_first_time(msg_parts);
+  // 2. Device Disconnected Event
+  device.on("disconnected", function () {
+    console.log("========================================");
+    console.log("DEVICE DISCONNECTED");
+    console.log("Device ID:", device.getUID());
+    console.log("========================================");
+    is_proxy_CRS_device = crsTerminals.includes(device.getUID());
+
   });
 
-  device.on("hbt", function (device_id, msg_parts) {
-    console.log("HEARTBEAT RECEIVED: " + device_id);
-
-    this.receive_hbt(msg_parts);
-  });
-
+  // 3. Terminal Registration (0x0100)
   device.on("register", function (device_id, msg_parts) {
-    console.log("TERMINAL TRYING TO REGISTER: " + device_id);
-
+    console.log("========================================");
+    console.log("TERMINAL REGISTRATION");
+    console.log("Device ID:", device_id);
+    console.log("========================================");
+    
+    // Registration response handled by adapter
     this.new_device_register(msg_parts);
-  });
-  device.on("login_request", function (device_id, msg_parts) {
     is_proxy_CRS_device = crsTerminals.includes(device_id);
 
-    console.log(
-      "Hey! I want to start transmiting my position. Please accept me. My name is " +
-        device_id
-    );
+  });
 
+  // 4. Terminal Authentication/Login (0x0102)
+  device.on("login_request", function (device_id, msg_parts) {
+    console.log("========================================");
+    console.log("TERMINAL AUTHENTICATION");
+    console.log("Device ID:", device_id);
+    console.log("========================================");
+    
+    // Authentication handled by adapter
     this.login_authorized(true, msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
 
-    console.log("Ok, " + device_id + ", you're accepted!");
   });
+
+  // 5. Terminal Heartbeat (0x0002)
+  device.on("hbt", function (device_id, msg_parts) {
+    console.log("========================================");
+    console.log("HEARTBEAT RECEIVED");
+    console.log("Device ID:", device_id);
+    console.log("Sequence:", msg_parts.cmd_serial_no);
+    console.log("========================================");
+    
+    // Heartbeat handled by adapter
+    this.receive_hbt(msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
+
+  });
+
+  // 6. Terminal Logout (0x0003)
   device.on("logout", function (device_id, msg_parts) {
-    console.log("TERMINAL TRYING TO LOGOUT: " + device_id);
+    console.log("========================================");
+    console.log("TERMINAL LOGOUT");
+    console.log("Device ID:", device_id);
+    console.log("========================================");
+    
     this.logout(msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
+
   });
 
+  // 7. Location Information Report (0x0200 without alarm)
   device.on("ping", function (data, msg_parts) {
-    //this = device
-    console.log(
-      "I'm here: " +
-        data.latitude +
-        ", " +
-        data.longitude +
-        " (" +
-        this.getUID() +
-        ")"
-    );
+    console.log("========================================");
+    console.log("LOCATION REPORT");
+    console.log("Device ID:", data.device_id);
+    console.log("Position:", data.latitude, ",", data.longitude);
+    console.log("Speed:", data.speed, "km/h");
+    console.log("Time:", data.date);
+    console.log("========================================");
+    
+    // Location report handled by adapter
     this.received_location_report(msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(data.device_id);
 
-    /**
-     * #######################################################################
-     * ########## SENDING LOCATION INFORMATION TO SERVER ######################
-     * {
-     *   alarm_mask: '00000000',
-     *   status: '00000002',
-     *   latitude: 13.486583,
-     *   longitude: 39.4528,
-     *   height: 7,
-     *   speed: 16,
-     *   direction: 0,
-     *   date: 2024-11-15T21:47:35.000Z,
-     *   orientation: '',
-     *   io_state: '',
-     *   mile_post: '',
-     *   mile_data: '',
-     *   availability: ''
-     * }
-     * #######################################################################
-     */
-    fetch(`http://78.47.144.132:3000/api/GPSLocationFeed`, {
-      method: "POST",
-      mode: "cors",
-      body: JSON.stringify({ data: data }),
-      headers: {
-        "Content-Type": "application/json; charset=UTF-8",
-      },
-    })
-      .then((response) => {
-        console.log("MooveLocation Returned RAW response : ");
-        console.log(response);
-        return response.json();
-      })
-      .then((data) => {
-        console.log("MooveLocation Returned FORMATTED Data : ");
-        console.log(data);
-      })
-      .catch((err) => {
-        console.log("ERROR SENDING TO MOOVE LOCATION PLATFORM");
-        console.log(err);
-        console.log("data OBJECT");
-        console.log(data);
-        console.log("JSON.stringify(data)");
-        console.log(JSON.stringify(data));
-      });
-    /**
-     * #######################################################################
-     */
-
-    //Look what informations the device sends to you (maybe velocity, gas level, etc)
-    //console.log(data);
-    return data;
   });
 
+  // 8. Alarm Report (0x0200 with alarm flag)
   device.on("alarm", function (alarmData, msgParts) {
-    //this = device
-    console.log("TODO- ALARM PARSING");
-    //Look what informations the device sends to you (maybe velocity, gas level, etc)
-    //console.log(data);
+    console.log("========================================");
+    console.log("ALARM REPORT");
+    console.log("Device ID:", alarmData.device_id);
+    console.log("Alarm Type:", alarmData.alarm_type);
+    console.log("Position:", alarmData.latitude, ",", alarmData.longitude);
+    console.log("========================================");
+    
+    // Alarm report handled by adapter
     this.received_alarm_report(msgParts);
+    is_proxy_CRS_device = crsTerminals.includes(alarmData.device_id);
 
-    return msgParts;
+  });
+
+  // 9. Other Commands
+  device.on("other", function (device_id, msg_parts) {
+    console.log("========================================");
+    console.log("OTHER COMMAND");
+    console.log("Device ID:", device_id);
+    console.log("Command:", msg_parts.cmd);
+    console.log("========================================");
+    
+    // Handle other commands via adapter
+    device.adapter.run_other(msg_parts.cmd, msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
+    
+  });
+
+  // 10. Batch Location Upload
+  device.on("batch_location", function (device_id, msg_parts) {
+    console.log("========================================");
+    console.log("BATCH LOCATION UPLOAD");
+    console.log("Device ID:", device_id);
+    console.log("========================================");
+    
+    // Batch location handled by adapter
+    device.adapter.batch_location("0001", msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
+
+  });
+
+  // 11. Driver Information
+  device.on("driver_info", function (device_id, msg_parts) {
+    console.log("========================================");
+    console.log("DRIVER INFORMATION");
+    console.log("Device ID:", device_id);
+    console.log("========================================");
+    
+    // Driver info handled by adapter
+    device.adapter.driver_info("0001", msg_parts);
+    is_proxy_CRS_device = crsTerminals.includes(device_id);
+
   });
 
   //Also, you can listen on the native connection object
   connection.on("data", function (data) {
     if (is_proxy_CRS_device) {
-      //echo raw data package
-      console.log("=================================");
-      console.log(
-        "UT04S CRS - RAW DATA emitted : IMEI - " + bufferToHexString(data)
-      );
-      console.log("==================================================");
-      client.write(data)
+    console.log("========================================");
+    console.log("RAW DATA FROM DEVICE");
+    console.log("Hex:", data.toString("hex"));
+    console.log("========================================");
+    client.write(data)
         ? console.log(
-            "UT04S - Data Written to CRS server : " + bufferToHexString(data)
+            "UT04S - Data Written to CRS server : " + data.toString("hex")
           )
         : console.log(
-            "UT04S - NOT Written to CRS server : " + bufferToHexString(data)
+            "UT04S - NOT Written to CRS server : " + data.toString("hex")
           );
-      console.log("=================================");
     } else {
-      //echo raw data package
-      console.log("========================================");
-      console.log("UT04S RAW DATA HEX : " + data.toString("hex"));
-
-      console.log("===========================================");
+    console.log("========================================");
+    console.log("RAW DATA FROM DEVICE");
+    console.log("Hex:", data.toString("hex"));
+    console.log("========================================");
     }
   });
+
+
+  // Connection error handling
+  connection.on("error", function (err) {
+    console.error("========================================");
+    console.error("CONNECTION ERROR");
+    console.error("Error:", err.message);
+    console.error("========================================");
+  });
+
+  // Connection close handling
+  connection.on("close", function () {
+    console.log("========================================");
+    console.log("CONNECTION CLOSED");
+    console.log("Device:", device.getUID());
+    console.log("========================================");
+  });
 });
+
+// Handle server errors
+server.on('error', function (err) {
+  console.error("SERVER ERROR:", err);
+});
+
+// Handle process termination
+process.on('SIGINT', function() {
+  console.log("\nGracefully shutting down from SIGINT (Ctrl-C)");
+  process.exit(0);
+});
+
+module.exports = server;
