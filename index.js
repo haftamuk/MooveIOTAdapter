@@ -14,13 +14,25 @@ const crsTerminals = [
   "020201232938"
 ];
 
+const gpsposTerminals = [
+  "020201206555",
+  "020201205789",
+  "020201223132",
+  "020201263620",
+  "020201292186",
+  "20201294976"
+];
+
 
 var server = gps.server(options, function (device, connection) {
   // #######################################################################################################################
   // ################################################# CRS ONLY ############################################################
   // #######################################################################################################################
   let client = new net.Socket();
+  let client_gpspos = new net.Socket();
+
   let is_proxy_CRS_device = false;
+  let is_proxy_gpspos_device = false;
   try {
     client.connect(22422, "193.193.165.165", function () {
       console.log(
@@ -45,11 +57,43 @@ var server = gps.server(options, function (device, connection) {
     );
   }
 
+
+    try {
+    client_gpspos.connect(8800, "www.gpspos.net", function () {
+      console.log(
+        "=========================================================================="
+      );
+      console.log("GPSPOS- Connected "); // acknowledge socket connection
+      console.log(
+        "=========================================================================="
+      );
+
+      console.log("gpspos - CONNECTED.");
+    });
+    console.log("gpspos - DEVICE Connected "); // acknowledge socket connection
+  } catch (error) {
+    console.log("gpspos - ERROR : " + error.message);
+    console.log(
+      "=========================================================================="
+    );
+    console.log("gpspos - ERROR : " + error.message);
+    console.log(
+      "=========================================================================="
+    );
+  }
+
+
   client.on("error", (err) => {
     console.log("CRS - Error Connecting : " + err.message);
     console.log("CRS - Error Connecting : " + err.message);
   });
   
+    client_gpspos.on("error", (err) => {
+    console.log("CRS - Error Connecting : " + err.message);
+    console.log("CRS - Error Connecting : " + err.message);
+  });
+  
+
   console.log("========================================");
   console.log("UT04S ADAPTER INITIALIZED");
   console.log("Listening on port:", options.port);
@@ -62,6 +106,7 @@ var server = gps.server(options, function (device, connection) {
     console.log("Remote IP:", connection.remoteAddress);
     console.log("========================================");
     is_proxy_CRS_device = crsTerminals.includes(device.getUID());
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
     return data;
   });
@@ -73,6 +118,7 @@ var server = gps.server(options, function (device, connection) {
     console.log("Device ID:", device.getUID());
     console.log("========================================");
     is_proxy_CRS_device = crsTerminals.includes(device.getUID());
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -86,6 +132,7 @@ var server = gps.server(options, function (device, connection) {
     // Registration response handled by adapter
     this.new_device_register(msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -99,6 +146,7 @@ var server = gps.server(options, function (device, connection) {
     // Authentication handled by adapter
     this.login_authorized(true, msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -113,6 +161,7 @@ var server = gps.server(options, function (device, connection) {
     // Heartbeat handled by adapter
     this.receive_hbt(msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -125,6 +174,7 @@ var server = gps.server(options, function (device, connection) {
     
     this.logout(msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -141,6 +191,7 @@ var server = gps.server(options, function (device, connection) {
     // Location report handled by adapter
     this.received_location_report(msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(data.device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -156,6 +207,7 @@ var server = gps.server(options, function (device, connection) {
     // Alarm report handled by adapter
     this.received_alarm_report(msgParts);
     is_proxy_CRS_device = crsTerminals.includes(alarmData.device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -170,7 +222,8 @@ var server = gps.server(options, function (device, connection) {
     // Handle other commands via adapter
     device.adapter.run_other(msg_parts.cmd, msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
-    
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
+
   });
 
   // 10. Batch Location Upload
@@ -183,6 +236,7 @@ var server = gps.server(options, function (device, connection) {
     // Batch location handled by adapter
     device.adapter.batch_location("0001", msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
@@ -196,28 +250,42 @@ var server = gps.server(options, function (device, connection) {
     // Driver info handled by adapter
     device.adapter.driver_info("0001", msg_parts);
     is_proxy_CRS_device = crsTerminals.includes(device_id);
+    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
 
   });
 
   //Also, you can listen on the native connection object
-  connection.on("data", function (data) {
+  connection.on('data', function (data) {
     if (is_proxy_CRS_device) {
-    console.log("========================================");
-    console.log("RAW DATA FROM DEVICE");
-    console.log("Hex:", data.toString("hex"));
-    console.log("========================================");
-    client.write(data)
+      console.log('========================================');
+      console.log('RAW DATA FROM DEVICE');
+      console.log('Hex:', data.toString('hex'));
+      console.log('========================================');
+      client.write(data)
         ? console.log(
-            "UT04S - Data Written to CRS server : " + data.toString("hex")
+            'UT04S - Data Written to CRS server : ' + data.toString('hex'),
           )
         : console.log(
-            "UT04S - NOT Written to CRS server : " + data.toString("hex")
+            'UT04S - NOT Written to CRS server : ' + data.toString('hex'),
+          );
+    }
+    if (is_proxy_gpspos_device) {
+      console.log('========================================');
+      console.log('RAW DATA FROM DEVICE');
+      console.log('Hex:', data.toString('hex'));
+      console.log('========================================');
+      client_gpspos.write(data)
+        ? console.log(
+            'UT04S - Data Written to GPSPOS server : ' + data.toString('hex'),
+          )
+        : console.log(
+            'UT04S - NOT Written to GPSPOS server : ' + data.toString('hex'),
           );
     } else {
-    console.log("========================================");
-    console.log("RAW DATA FROM DEVICE");
-    console.log("Hex:", data.toString("hex"));
-    console.log("========================================");
+      console.log('========================================');
+      console.log('RAW DATA FROM DEVICE');
+      console.log('Hex:', data.toString('hex'));
+      console.log('========================================');
     }
   });
 
