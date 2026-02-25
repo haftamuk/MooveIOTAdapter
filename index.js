@@ -1,321 +1,285 @@
 // File: UT04SAdapter/index.js
-import net from "net";
+const net = require('net');
+const gps = require('gps-tracking');
 
-import gps from "gps-tracking";
-
-var options = {
+const options = {
   debug: true,
   port: 8800,
-  device_adapter: "UT04S",
+  device_adapter: 'UT04S',
 };
 
+// Lists of terminals that should be proxied to external servers
 const crsTerminals = [
-  "020201228393",
-  "020201232938"
+  '020201228393',
+  '020201232938'
 ];
 
 const gpsposTerminals = [
-  "020201206555",
-  "020201205789",
-  "020201223132",
-  "020201263620",
-  "020201292186",
-  "020201294976",
-  "020201291753",
-  "020201228351"
+  '020201206555',
+  '020201205789',
+  '020201223132',
+  '020201263620',
+  '020201292186',
+  '020201294976',
+  '020201291753',
+  '020201228351'
 ];
 
+// Map to hold proxy sockets per device ID: { deviceId: { crs: Socket, gpspos: Socket } }
+const deviceProxySockets = new Map();
 
-var server = gps.server(options, function (device, connection) {
-  // #######################################################################################################################
-  // ################################################# CRS ONLY ############################################################
-  // #######################################################################################################################
-  let client = new net.Socket();
-  let client_gpspos = new net.Socket();
+/**
+ * Forward raw data to external servers for a given device.
+ * @param {string} deviceId - 12‑character device ID (hex string)
+ * @param {string} rawHex - Raw message in hex (from msg_parts.raw_hex)
+ */
+function forwardToProxy(deviceId, rawHex) {
+  const isCrs = crsTerminals.includes(deviceId);
+  const isGpspos = gpsposTerminals.includes(deviceId);
 
-  let is_proxy_CRS_device = false;
-  let is_proxy_gpspos_device = false;
-  try {
-    client.connect(22422, "193.193.165.165", function () {
-      console.log(
-        "=========================================================================="
-      );
-      console.log("CRS- Connected "); // acknowledge socket connection
-      console.log(
-        "=========================================================================="
-      );
+  if (!isCrs && !isGpspos) return;
 
-      console.log("CRS - CONNECTED.");
-    });
-    console.log("CRS - DEVICE Connected "); // acknowledge socket connection
-  } catch (error) {
-    console.log("CRS - ERROR : " + error.message);
-    console.log(
-      "=========================================================================="
-    );
-    console.log("CRS - ERROR : " + error.message);
-    console.log(
-      "=========================================================================="
-    );
+  // Get or create socket objects for this device
+  let sockets = deviceProxySockets.get(deviceId);
+  if (!sockets) {
+    sockets = { crs: null, gpspos: null };
+    deviceProxySockets.set(deviceId, sockets);
   }
 
+  const buffer = Buffer.from(rawHex, 'hex');
 
-    try {
-    client_gpspos.connect(8800, "www.gpspos.net", function () {
-      console.log(
-        "=========================================================================="
-      );
-      console.log("GPSPOS- Connected "); // acknowledge socket connection
-      console.log(
-        "=========================================================================="
-      );
-
-      console.log("gpspos - CONNECTED.");
-    });
-    console.log("gpspos - DEVICE Connected "); // acknowledge socket connection
-  } catch (error) {
-    console.log("gpspos - ERROR : " + error.message);
-    console.log(
-      "=========================================================================="
-    );
-    console.log("gpspos - ERROR : " + error.message);
-    console.log(
-      "=========================================================================="
-    );
+  // Forward to CRS server if needed
+  if (isCrs) {
+    if (!sockets.crs || sockets.crs.destroyed) {
+      sockets.crs = new net.Socket();
+      sockets.crs.connect(22422, '193.193.165.165', () => {
+        console.log(`[${deviceId}] CRS proxy connected`);
+      });
+      sockets.crs.on('error', (err) => {
+        console.error(`[${deviceId}] CRS proxy error:`, err.message);
+        // Destroy and schedule reconnect after 5 seconds
+        sockets.crs.destroy();
+        sockets.crs = null;
+        setTimeout(() => {
+          // Attempt to reconnect only if this device is still active
+          if (deviceProxySockets.has(deviceId)) {
+            forwardToProxy(deviceId, rawHex); // re‑trigger connection
+          }
+        }, 5000);
+      });
+    }
+    if (sockets.crs && !sockets.crs.destroyed) {
+      sockets.crs.write(buffer);
+    }
   }
 
+  // Forward to GPSPOS server if needed
+  if (isGpspos) {
+    if (!sockets.gpspos || sockets.gpspos.destroyed) {
+      sockets.gpspos = new net.Socket();
+      sockets.gpspos.connect(8800, 'www.gpspos.net', () => {
+        console.log(`[${deviceId}] GPSPOS proxy connected`);
+      });
+      sockets.gpspos.on('error', (err) => {
+        console.error(`[${deviceId}] GPSPOS proxy error:`, err.message);
+        sockets.gpspos.destroy();
+        sockets.gpspos = null;
+        setTimeout(() => {
+          if (deviceProxySockets.has(deviceId)) {
+            forwardToProxy(deviceId, rawHex);
+          }
+        }, 5000);
+      });
+    }
+    if (sockets.gpspos && !sockets.gpspos.destroyed) {
+      sockets.gpspos.write(buffer);
+    }
+  }
+}
 
-  client.on("error", (err) => {
-    console.log("CRS - Error Connecting : " + err.message);
-    console.log("CRS - Error Connecting : " + err.message);
-  });
-  
-    client_gpspos.on("error", (err) => {
-    console.log("CRS - Error Connecting : " + err.message);
-    console.log("CRS - Error Connecting : " + err.message);
-  });
-  
+// Create and start the GPS tracking server
+const server = gps.server(options, (device, connection) => {
+  console.log('========================================');
+  console.log('UT04S ADAPTER INITIALIZED');
+  console.log('Listening on port:', options.port);
+  console.log('========================================');
 
-  console.log("========================================");
-  console.log("UT04S ADAPTER INITIALIZED");
-  console.log("Listening on port:", options.port);
-  console.log("========================================");
-  
-  // 1. Device Connected Event
-  device.on("connected", function (data) {
-    console.log("========================================");
-    console.log("DEVICE CONNECTED");
-    console.log("Remote IP:", connection.remoteAddress);
-    console.log("========================================");
-    is_proxy_CRS_device = crsTerminals.includes(device.getUID());
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
-
-    return data;
-  });
-
-  // 2. Device Disconnected Event
-  device.on("disconnected", function () {
-    console.log("========================================");
-    console.log("DEVICE DISCONNECTED");
-    console.log("Device ID:", device.getUID());
-    console.log("========================================");
-    is_proxy_CRS_device = crsTerminals.includes(device.getUID());
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
-
-  });
-
-  // 3. Terminal Registration (0x0100)
-  device.on("register", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("TERMINAL REGISTRATION");
-    console.log("Device ID:", device_id);
-    console.log("========================================");
-    
-    // Registration response handled by adapter
-    this.new_device_register(msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
-
+  // ----------------------------------------------------------------------
+  // Device connected
+  // ----------------------------------------------------------------------
+  device.on('connected', () => {
+    console.log('========================================');
+    console.log('DEVICE CONNECTED');
+    console.log('Remote IP:', connection.remoteAddress);
+    console.log('========================================');
   });
 
-  // 4. Terminal Authentication/Login (0x0102)
-  device.on("login_request", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("TERMINAL AUTHENTICATION");
-    console.log("Device ID:", device_id);
-    console.log("========================================");
-    
-    // Authentication handled by adapter
-    this.login_authorized(true, msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
+  // ----------------------------------------------------------------------
+  // Device disconnected – clean up proxy sockets
+  // ----------------------------------------------------------------------
+  device.on('disconnected', () => {
+    const devId = device.getUID();
+    console.log('========================================');
+    console.log('DEVICE DISCONNECTED');
+    console.log('Device ID:', devId);
+    console.log('========================================');
 
+    const sockets = deviceProxySockets.get(devId);
+    if (sockets) {
+      if (sockets.crs) sockets.crs.destroy();
+      if (sockets.gpspos) sockets.gpspos.destroy();
+      deviceProxySockets.delete(devId);
+    }
   });
 
-  // 5. Terminal Heartbeat (0x0002)
-  device.on("hbt", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("HEARTBEAT RECEIVED");
-    console.log("Device ID:", device_id);
-    console.log("Sequence:", msg_parts.cmd_serial_no);
-    console.log("========================================");
-    
-    // Heartbeat handled by adapter
-    this.receive_hbt(msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
+  // ----------------------------------------------------------------------
+  // Terminal registration (0x0100)
+  // ----------------------------------------------------------------------
+  device.on('register', (device_id, msg_parts) => {
+    console.log('========================================');
+    console.log('TERMINAL REGISTRATION');
+    console.log('Device ID:', device_id);
+    console.log('========================================');
 
+    device.new_device_register(msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex);
   });
 
-  // 6. Terminal Logout (0x0003)
-  device.on("logout", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("TERMINAL LOGOUT");
-    console.log("Device ID:", device_id);
-    console.log("========================================");
-    
-    this.logout(msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
+  // ----------------------------------------------------------------------
+  // Terminal authentication / login (0x0102)
+  // ----------------------------------------------------------------------
+  device.on('login_request', (device_id, msg_parts) => {
+    console.log('========================================');
+    console.log('TERMINAL AUTHENTICATION');
+    console.log('Device ID:', device_id);
+    console.log('========================================');
 
+    device.login_authorized(true, msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex);
   });
 
-  // 7. Location Information Report (0x0200 without alarm)
-  device.on("ping", function (data, msg_parts) {
-    console.log("========================================");
-    console.log("LOCATION REPORT");
-    console.log("Device ID:", data.device_id);
-    console.log("Position:", data.latitude, ",", data.longitude);
-    console.log("Speed:", data.speed, "km/h");
-    console.log("Time:", data.date);
-    console.log("========================================");
-    
-    // Location report handled by adapter
-    this.received_location_report(msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(data.device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
+  // ----------------------------------------------------------------------
+  // Heartbeat (0x0002)
+  // ----------------------------------------------------------------------
+  device.on('hbt', (device_id, msg_parts) => {
+    console.log('========================================');
+    console.log('HEARTBEAT RECEIVED');
+    console.log('Device ID:', device_id);
+    console.log('Sequence:', msg_parts.cmd_serial_no);
+    console.log('========================================');
 
+    device.receive_hbt(msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex);
   });
 
-  // 8. Alarm Report (0x0200 with alarm flag)
-  device.on("alarm", function (alarmData, msgParts) {
-    console.log("========================================");
-    console.log("ALARM REPORT");
-    console.log("Device ID:", alarmData.device_id);
-    console.log("Alarm Type:", alarmData.alarm_type);
-    console.log("Position:", alarmData.latitude, ",", alarmData.longitude);
-    console.log("========================================");
-    
-    // Alarm report handled by adapter
-    this.received_alarm_report(msgParts);
-    is_proxy_CRS_device = crsTerminals.includes(alarmData.device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
+  // ----------------------------------------------------------------------
+  // Terminal logout (0x0003)
+  // ----------------------------------------------------------------------
+  device.on('logout', (device_id, msg_parts) => {
+    console.log('========================================');
+    console.log('TERMINAL LOGOUT');
+    console.log('Device ID:', device_id);
+    console.log('========================================');
 
+    device.logout(msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex);
   });
 
-  // 9. Other Commands
-  device.on("other", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("OTHER COMMAND");
-    console.log("Device ID:", device_id);
-    console.log("Command:", msg_parts.cmd);
-    console.log("========================================");
-    
-    // Handle other commands via adapter
+  // ----------------------------------------------------------------------
+  // Location report (0x0200 without alarm)
+  // ----------------------------------------------------------------------
+  device.on('ping', (data, msg_parts) => {
+    console.log('========================================');
+    console.log('LOCATION REPORT');
+    console.log('Device ID:', data.device_id);
+    console.log('Position:', data.latitude, ',', data.longitude);
+    console.log('Speed:', data.speed, 'km/h');
+    console.log('Time:', data.date);
+    console.log('========================================');
+
+    device.received_location_report(msg_parts);
+    forwardToProxy(data.device_id, msg_parts.raw_hex);
+  });
+
+  // ----------------------------------------------------------------------
+  // Alarm report (0x0200 with alarm flag)
+  // ----------------------------------------------------------------------
+  device.on('alarm', (alarmData, msg_parts) => {
+    console.log('========================================');
+    console.log('ALARM REPORT');
+    console.log('Device ID:', alarmData.device_id);
+    console.log('Alarm Type:', alarmData.alarm_type);
+    console.log('Position:', alarmData.latitude, ',', alarmData.longitude);
+    console.log('========================================');
+
+    device.received_alarm_report(msg_parts);
+    forwardToProxy(alarmData.device_id, msg_parts.raw_hex);
+  });
+
+  // ----------------------------------------------------------------------
+  // Other commands (0x0107, 0x0704, 0x0702, etc.)
+  // ----------------------------------------------------------------------
+  device.on('other', (device_id, msg_parts) => {
+    console.log('========================================');
+    console.log('OTHER COMMAND');
+    console.log('Device ID:', device_id);
+    console.log('Command:', msg_parts.cmd);
+    console.log('========================================');
+
     device.adapter.run_other(msg_parts.cmd, msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
-
+    forwardToProxy(device_id, msg_parts.raw_hex);
   });
 
-  // 10. Batch Location Upload
-  device.on("batch_location", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("BATCH LOCATION UPLOAD");
-    console.log("Device ID:", device_id);
-    console.log("========================================");
-    
-    // Batch location handled by adapter
-    device.adapter.batch_location("0001", msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
-
+  // ----------------------------------------------------------------------
+  // Optional: log raw data that is not forwarded (e.g., debugging)
+  // ----------------------------------------------------------------------
+  connection.on('data', (data) => {
+    // This runs for *every* packet; we already forward inside the handlers.
+    // Here we can simply log the raw data if debug is enabled.
+    console.log('========================================');
+    console.log('RAW DATA FROM DEVICE');
+    console.log('Hex:', data.toString('hex'));
+    console.log('========================================');
   });
 
-  // 11. Driver Information
-  device.on("driver_info", function (device_id, msg_parts) {
-    console.log("========================================");
-    console.log("DRIVER INFORMATION");
-    console.log("Device ID:", device_id);
-    console.log("========================================");
-    
-    // Driver info handled by adapter
-    device.adapter.driver_info("0001", msg_parts);
-    is_proxy_CRS_device = crsTerminals.includes(device_id);
-    is_proxy_gpspos_device = gpsposTerminals.includes(device.getUID());
-
-  });
-
-  //Also, you can listen on the native connection object
-  connection.on('data', function (data) {
-    if (is_proxy_CRS_device) {
-      console.log('========================================');
-      console.log('RAW DATA FROM DEVICE');
-      console.log('Hex:', data.toString('hex'));
-      console.log('========================================');
-      client.write(data)
-        ? console.log(
-            'UT04S - Data Written to CRS server : ' + data.toString('hex'),
-          )
-        : console.log(
-            'UT04S - NOT Written to CRS server : ' + data.toString('hex'),
-          );
-    }
-    if (is_proxy_gpspos_device) {
-      console.log('========================================');
-      console.log('RAW DATA FROM DEVICE');
-      console.log('Hex:', data.toString('hex'));
-      console.log('========================================');
-      client_gpspos.write(data)
-        ? console.log(
-            'UT04S - Data Written to GPSPOS server : ' + data.toString('hex'),
-          )
-        : console.log(
-            'UT04S - NOT Written to GPSPOS server : ' + data.toString('hex'),
-          );
-    } else {
-      console.log('========================================');
-      console.log('RAW DATA FROM DEVICE');
-      console.log('Hex:', data.toString('hex'));
-      console.log('========================================');
-    }
-  });
-
-
+  // ----------------------------------------------------------------------
   // Connection error handling
-  connection.on("error", function (err) {
-    console.error("========================================");
-    console.error("CONNECTION ERROR");
-    console.error("Error:", err.message);
-    console.error("========================================");
+  // ----------------------------------------------------------------------
+  connection.on('error', (err) => {
+    console.error('========================================');
+    console.error('CONNECTION ERROR');
+    console.error('Error:', err.message);
+    console.error('========================================');
   });
 
-  // Connection close handling
-  connection.on("close", function () {
-    console.log("========================================");
-    console.log("CONNECTION CLOSED");
-    console.log("Device:", device.getUID());
-    console.log("========================================");
+  // ----------------------------------------------------------------------
+  // Connection close (already handled by device.disconnected)
+  // ----------------------------------------------------------------------
+  connection.on('close', () => {
+    console.log('========================================');
+    console.log('CONNECTION CLOSED');
+    console.log('Device:', device.getUID());
+    console.log('========================================');
   });
 });
 
-// Handle server errors
-server.on('error', function (err) {
-  console.error("SERVER ERROR:", err);
+// ------------------------------------------------------------------------
+// Server error handling
+// ------------------------------------------------------------------------
+server.on('error', (err) => {
+  console.error('SERVER ERROR:', err);
 });
 
-// Handle process termination
-process.on('SIGINT', function() {
-  console.log("\nGracefully shutting down from SIGINT (Ctrl-C)");
+// ------------------------------------------------------------------------
+// Graceful shutdown on SIGINT (Ctrl-C)
+// ------------------------------------------------------------------------
+process.on('SIGINT', () => {
+  console.log('\nGracefully shutting down from SIGINT (Ctrl-C)');
+  // Close all proxy sockets
+  for (const [devId, sockets] of deviceProxySockets.entries()) {
+    if (sockets.crs) sockets.crs.destroy();
+    if (sockets.gpspos) sockets.gpspos.destroy();
+  }
+  deviceProxySockets.clear();
   process.exit(0);
 });
