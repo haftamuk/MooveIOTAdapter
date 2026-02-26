@@ -1,6 +1,7 @@
 // File: UT04SAdapter/index.js
-const net = require('net');
-const gps = require('gps-tracking');
+import net from "net";
+
+import gps from "gps-tracking";
 
 const options = {
   debug: true,
