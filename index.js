@@ -275,6 +275,9 @@ function setupDeviceHandlers(device, connection, serverType) {
   device.on('heartbeat', (device_id, msg_parts) => {
     if (serverType === 'ut04s') {
       device.receive_hbt(msg_parts);
+    } else {
+      // *** GT06: send heartbeat response ***
+      device.adapter.receive_heartbeat(msg_parts);
     }
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
     sendToAPI(API_ENDPOINTS.HEARTBEAT, {
@@ -285,6 +288,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs)
     }).catch(() => {});
   });
+
 
   device.on('logout', (device_id, msg_parts) => {
     device.logout(msg_parts);
@@ -321,9 +325,12 @@ function setupDeviceHandlers(device, connection, serverType) {
     sendToAPI(API_ENDPOINTS.LOCATION, payload).catch(() => {});
   });
 
-  device.on('alarm', (alarmData, msg_parts) => {
+device.on('alarm', (alarmData, msg_parts) => {
     if (serverType === 'ut04s') {
       device.received_alarm_report(msg_parts);
+    } else {
+      // *** GT06: send alarm response ***
+      device.adapter.send_alarm_response(msg_parts);
     }
     forwardToProxy(alarmData.device_id, msg_parts.raw_hex, serverType);
 

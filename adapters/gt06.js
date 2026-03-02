@@ -1,6 +1,5 @@
 /* Comprehensive GT06 Protocol Adapter with Enhanced Alarm Parsing */
 const f = require('../lib/functions');
-
 exports.protocol = 'GT06N';
 exports.model_name = 'GT06N';
 exports.compatible_hardware = ['GT06N', 'GT06', 'GT06E', 'GT06F', 'GT06H'];
@@ -22,7 +21,6 @@ var adapter = function (device) {
       var hexData = this.bufferToHexString(data);
       console.log('Raw hex data received:', hexData);
       
-      // Check minimum length
       if (hexData.length < 10) {
         console.log('Packet too short');
         return { cmd: 'noop', action: 'noop', device_id: '' };
@@ -33,38 +31,29 @@ var adapter = function (device) {
         'start': hexData.substr(0, 4)
       };
 
-      // Check for valid start bytes (GT06 uses 7878 or 7979)
       if (parts['start'] !== '7878' && parts['start'] !== '7979') {
         console.log('Invalid start bytes:', parts['start']);
         return { cmd: 'noop', action: 'noop', device_id: '' };
       }
 
-      // Parse packet length
       parts['length'] = parseInt(hexData.substr(4, 2), 16);
       
-      // Check for complete packet
       const minExpectedLength = 4 + 2 + (parts['length'] * 2) + 4;
       if (hexData.length < minExpectedLength) {
         console.log(`Incomplete packet: ${hexData.length}/${minExpectedLength}`);
         return { cmd: 'noop', action: 'noop', device_id: '' };
       }
 
-      // Extract protocol ID
       parts['protocol_id'] = hexData.substr(6, 2).toLowerCase();
       console.log('Protocol ID:', parts['protocol_id']);
       
-      // Extract data section
       const dataStart = 8; // After start(4) + length(2) + protocol(2)
-      const dataEnd = 8 + (parts['length'] - 1) * 2; // Length includes protocol byte
+      const dataEnd = 8 + (parts['length'] - 1) * 2;
       parts['data'] = hexData.substring(dataStart, dataStart + (parts['length'] - 1) * 2);
       
-      // Extract serial number and CRC (if present in data)
       this.extract_serial_crc(parts);
-      
-      // Map protocol IDs to actions with enhanced detection
       this.map_protocol_to_action(parts);
 
-      // Extract device ID for login packets
       if (parts['protocol_id'] === '01' && parts['data'].length >= 16) {
         parts['device_id'] = parts['data'].substr(0, 16);
       } else {
@@ -81,11 +70,11 @@ var adapter = function (device) {
 
   this.extract_serial_crc = function(parts) {
     const data = parts['data'];
-    if (data.length >= 4) {
-      // Last 4 hex digits are usually serial number (2 bytes) and CRC (2 bytes)
-      parts['serial_number'] = data.substr(data.length - 4, 2);
-      parts['crc'] = data.substr(data.length - 2, 2);
-      parts['data_body'] = data.substring(0, data.length - 4);
+    // Last 8 hex chars = 4 bytes = serial (2) + CRC (2)
+    if (data.length >= 8) {
+      parts['serial_number'] = data.substr(data.length - 8, 4); // 2 bytes
+      parts['crc'] = data.substr(data.length - 4, 4);           // 2 bytes
+      parts['data_body'] = data.substring(0, data.length - 8);
     } else {
       parts['data_body'] = data;
     }
@@ -94,31 +83,28 @@ var adapter = function (device) {
   this.map_protocol_to_action = function(parts) {
     const protocolMap = {
       '01': { cmd: 'login_request', action: 'login_request' },
-      '10': { cmd: 'ping', action: 'ping' }, // GPS data
-      '11': { cmd: 'ping', action: 'ping' }, // GPS data
-      '12': { cmd: 'ping', action: 'ping' }, // Location data
+      '10': { cmd: 'ping', action: 'ping' },
+      '11': { cmd: 'ping', action: 'ping' },
+      '12': { cmd: 'ping', action: 'ping' },
       '13': { cmd: 'heartbeat', action: 'heartbeat' },
-      '16': { cmd: 'alarm', action: 'alarm' }, // Standard alarm
+      '16': { cmd: 'alarm', action: 'alarm' },
       '17': { cmd: 'lbs_location', action: 'lbs_location' },
       '18': { cmd: 'status', action: 'status' },
-      '19': { cmd: 'status', action: 'status' }, // Extended status
-      '1a': { cmd: 'alarm', action: 'alarm' }, // Query address (used as alarm by some brands)
-      '1b': { cmd: 'alarm', action: 'alarm' }, // Extended alarm
-      '1c': { cmd: 'alarm', action: 'alarm' }, // Custom alarm
-      '22': { cmd: 'ping', action: 'ping' }, // GPS with address
-      '26': { cmd: 'alarm', action: 'alarm' }, // Alarm with address
-      '27': { cmd: 'alarm', action: 'alarm' }, // Extended alarm with status
-      '28': { cmd: 'ping', action: 'ping' }, // Multi-location data
-      '2a': { cmd: 'alarm', action: 'alarm' }, // Custom alarm 2
-      '2b': { cmd: 'alarm', action: 'alarm' }, // Custom alarm 3
-      '2c': { cmd: 'alarm', action: 'alarm' }, // Custom alarm 4
+      '19': { cmd: 'status', action: 'status' },
+      '1a': { cmd: 'alarm', action: 'alarm' },
+      '1b': { cmd: 'alarm', action: 'alarm' },
+      '1c': { cmd: 'alarm', action: 'alarm' },
+      '22': { cmd: 'ping', action: 'ping' },
+      '26': { cmd: 'alarm', action: 'alarm' },
+      '27': { cmd: 'alarm', action: 'alarm' },
+      '28': { cmd: 'ping', action: 'ping' },
+      '2a': { cmd: 'alarm', action: 'alarm' },
+      '2b': { cmd: 'alarm', action: 'alarm' },
+      '2c': { cmd: 'alarm', action: 'alarm' },
       '80': { cmd: 'command_response', action: 'command_response' },
       '81': { cmd: 'command_response', action: 'command_response' },
-      // ... (many more command_response mappings omitted for brevity, same as original)
-      'ff': { cmd: 'command_response', action: 'command_response' },
       'default': { cmd: 'noop', action: 'noop' }
     };
-
     const mapping = protocolMap[parts['protocol_id']] || protocolMap['default'];
     parts.cmd = mapping.cmd;
     parts.action = mapping.action;
@@ -133,17 +119,32 @@ var adapter = function (device) {
     return str;
   };
 
-  this.authorize = function () {
-    // Login response: 7878 05 01 0001 D9DC 0D0A
-    var response = '787805010001D9DC0D0A';
+  // Helper to build a standard response (length=0x05)
+  this.buildResponse = function (protocol, serial) {
+    const withoutCRC = '7878' + '05' + protocol + serial;
+    const crc = f.crc16(Buffer.from(withoutCRC, 'hex'));
+    return withoutCRC + crc + '0D0A';
+  };
+
+  this.authorize = function (msg_parts) {
+    const serial = msg_parts.serial_number || '0001';
+    const response = this.buildResponse('01', serial);
     console.log('Sending login response:', response);
     this.device.send(Buffer.from(response, 'hex'));
   };
   
   this.receive_heartbeat = function (msg_parts) {
-    // Heartbeat response: 7878 05 13 0001 D9DC 0D0A
-    var response = '787805130001D9DC0D0A';
+    const serial = msg_parts.serial_number || '0001';
+    const response = this.buildResponse('13', serial);
     console.log('Sending heartbeat response:', response);
+    this.device.send(Buffer.from(response, 'hex'));
+  };
+
+  this.send_alarm_response = function (msg_parts) {
+    const serial = msg_parts.serial_number || '0001';
+    const protocol = msg_parts.protocol_id; // use same protocol as received
+    const response = this.buildResponse(protocol, serial);
+    console.log('Sending alarm response:', response);
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -155,12 +156,9 @@ var adapter = function (device) {
       var str = msg_parts.data_body || msg_parts.data;
       console.log('Parsing location data, length:', str.length);
       
-      // Different GPS data formats based on protocol
       if (str.length >= 38) {
-        // Standard GPS format (protocol 0x12, 0x22, 0x10, 0x11, 0x16, 0x26, 0x1A, etc.)
         return this.parse_standard_gps_data(str, msg_parts);
       } else if (str.length >= 20) {
-        // Compact GPS format (some devices)
         return this.parse_compact_gps_data(str, msg_parts);
       } else {
         console.error('GPS data too short:', str.length);
@@ -173,7 +171,6 @@ var adapter = function (device) {
   };
 
   this.parse_standard_gps_data = function (str, msg_parts) {
-    // Parse date: 6 bytes (12 hex chars) - YYMMDDHHMMSS
     const dateHex = str.substr(0, 12);
     const year = parseInt(dateHex.substr(0, 2), 16) + 2000;
     const month = parseInt(dateHex.substr(2, 2), 16);
@@ -183,42 +180,32 @@ var adapter = function (device) {
     const second = parseInt(dateHex.substr(10, 2), 16);
     const date = new Date(year, month - 1, day, hour, minute, second);
     
-    // Parse satellites (1 byte)
     const satellites = parseInt(str.substr(12, 2), 16);
     
-    // Parse latitude (4 bytes = 8 hex chars)
     const latHex = str.substr(14, 8);
     let latitude = 0;
     if (latHex !== '00000000') {
       latitude = parseInt(latHex, 16) / 1800000;
     }
     
-    // Parse longitude (4 bytes = 8 hex chars)
     const lngHex = str.substr(22, 8);
     let longitude = 0;
     if (lngHex !== '00000000') {
       longitude = parseInt(lngHex, 16) / 1800000;
     }
     
-    // Parse speed (1 byte)
     const speed = parseInt(str.substr(30, 2), 16);
     
-    // Parse course/heading (2 bytes = 4 hex chars)
     const courseHex = str.substr(32, 4);
     let course = parseInt(courseHex, 16);
-    
-    // Fix course: if it's > 360, it might be including status bits
     if (course > 360) {
       course = course & 0xFF;
       course = (course * 360) / 255;
     }
     course = Math.round(course);
     
-    // Parse status byte (position varies by protocol)
     let statusByte = 0;
     let statusBinary = '00000000';
-    
-    // Try different positions for status byte
     if (str.length >= 38) {
       statusByte = parseInt(str.substr(36, 2), 16);
       statusBinary = statusByte.toString(2).padStart(8, '0');
@@ -243,9 +230,9 @@ var adapter = function (device) {
         charge_status: statusBinary[5] === '0' ? 'not_charging' : 'charging',
         acc_status: statusBinary[6] === '1',
         armed_status: statusBinary[7] === '1',
-        oil_cut: statusBinary[0] === '1', // Bit 7: 1=oil/electricity disconnected
-        gps_tracking: statusBinary[1] === '1', // Bit 6: 1=GPS tracking on
-        alarm_bits: statusBinary.substr(2, 3) // Bits 3-5: alarm type in binary
+        oil_cut: statusBinary[0] === '1',
+        gps_tracking: statusBinary[1] === '1',
+        alarm_bits: statusBinary.substr(2, 3)
       }
     };
     
@@ -262,25 +249,19 @@ var adapter = function (device) {
   };
 
   this.parse_compact_gps_data = function (str, msg_parts) {
-    // Compact format for some devices
     const date = new Date();
-    
-    // Try to extract coordinates from compact format
     let latitude = 0;
     let longitude = 0;
     let speed = 0;
     
     if (str.length >= 20) {
-      // Try to parse as compact coordinates
       try {
         const latPart = str.substr(0, 8);
         const lngPart = str.substr(8, 8);
-        
         if (latPart !== '00000000' && lngPart !== '00000000') {
           latitude = parseInt(latPart, 16) / 1800000;
           longitude = parseInt(lngPart, 16) / 1800000;
         }
-        
         if (str.length >= 22) {
           speed = parseInt(str.substr(16, 2), 16);
         }
@@ -317,17 +298,13 @@ var adapter = function (device) {
       var str = msg_parts.data_body || msg_parts.data;
       console.log('Parsing alarm data, protocol:', msg_parts.protocol_id, 'length:', str.length);
       
-      // Parse basic GPS data (common to all alarms)
       const gpsData = this.parse_standard_gps_data(str, msg_parts);
       if (!gpsData) {
         console.error('Failed to parse GPS data for alarm');
         return false;
       }
       
-      // Extract alarm code based on protocol and data structure
       let alarmCode = this.extract_alarm_code(str, msg_parts.protocol_id);
-      
-      // Enhanced alarm type mapping based on real device data
       const alarmType = this.map_alarm_code(alarmCode, msg_parts.protocol_id, str);
       
       const data = {
@@ -359,84 +336,52 @@ var adapter = function (device) {
       return data;
     } catch (error) {
       console.error('Error parsing alarm data:', error);
-      console.error('Data:', msg_parts.data);
       return false;
     }
   };
 
   this.extract_alarm_code = function(str, protocolId) {
-    let alarmCode = '01'; // Default to SOS
-    
-    // Different extraction methods based on protocol
+    let alarmCode = '01';
     switch(protocolId) {
-      case '1a': // Query address protocol (commonly used for alarms)
+      case '1a':
         if (str.length >= 4) {
-          // For 0x1A, alarm code is often in the language/extension field
-          // Try multiple positions based on observed data patterns
-          if (str.length >= 70) {
-            // Extended format
-            alarmCode = str.substr(68, 2);
-          } else if (str.length >= 56) {
-            // Medium format
-            alarmCode = str.substr(54, 2);
-          } else if (str.length >= 40) {
-            // Compact format
-            alarmCode = str.substr(38, 2);
-          } else {
-            // Last 4 hex chars often contain alarm info
-            alarmCode = str.substr(str.length - 4, 2);
-          }
+          if (str.length >= 70) alarmCode = str.substr(68, 2);
+          else if (str.length >= 56) alarmCode = str.substr(54, 2);
+          else if (str.length >= 40) alarmCode = str.substr(38, 2);
+          else alarmCode = str.substr(str.length - 4, 2);
         }
         break;
-        
-      case '16': // Standard alarm
-      case '26': // Alarm with address
-        if (str.length >= 56) {
-          // Standard position for basic alarms
-          alarmCode = str.substr(54, 2);
-        }
+      case '16':
+      case '26':
+        if (str.length >= 56) alarmCode = str.substr(54, 2);
         if (str.length >= 70) {
-          // Extended alarm packets
           const extendedCode = str.substr(68, 2);
-          if (extendedCode !== '00' && extendedCode !== '') {
-            alarmCode = extendedCode;
-          }
+          if (extendedCode !== '00' && extendedCode !== '') alarmCode = extendedCode;
         }
         break;
-        
-      case '27': // Extended alarm with status
-        if (str.length >= 60) {
-          alarmCode = str.substr(58, 2);
-        }
+      case '27':
+        if (str.length >= 60) alarmCode = str.substr(58, 2);
         break;
-        
       default:
-        // Try to find alarm code in common positions
         if (str.length >= 40) {
-          // Check status byte extension (bits 3-5 for alarm type)
           const statusByte = parseInt(str.substr(36, 2), 16);
           const statusBinary = statusByte.toString(2).padStart(8, '0');
           const alarmBits = statusBinary.substr(2, 3);
-          
-          // Convert 3-bit alarm code to hex
           switch(alarmBits) {
-            case '000': alarmCode = '00'; break; // Normal
-            case '100': alarmCode = '01'; break; // SOS
-            case '011': alarmCode = '02'; break; // Low Battery
-            case '010': alarmCode = '03'; break; // Power Cut
-            case '001': alarmCode = '04'; break; // Shock
+            case '000': alarmCode = '00'; break;
+            case '100': alarmCode = '01'; break;
+            case '011': alarmCode = '02'; break;
+            case '010': alarmCode = '03'; break;
+            case '001': alarmCode = '04'; break;
             default: alarmCode = '00';
           }
         }
     }
-    
     return alarmCode.toUpperCase();
   };
 
   this.map_alarm_code = function(alarmCode, protocolId, rawData) {
-    // Comprehensive alarm mapping based on GT06 protocol and observed device data
     const alarmMap = {
-      // Standard GT06 Protocol Alarms
       '00': 'Normal',
       '01': 'SOS Emergency',
       '02': 'Low Battery',
@@ -469,19 +414,14 @@ var adapter = function (device) {
       '1D': 'Reserved',
       '1E': 'Reserved',
       '1F': 'Reserved',
-      
-      // Extended Alarms (Protocol 0x1A specific)
       '20': 'External Power Disconnected',
       '21': 'External Power Connected',
       '22': 'GPS Jamming Detection',
-      // ... (rest of mapping unchanged, omitted for brevity)
       'FF': 'System Notification 15'
     };
     
     let alarmType = alarmMap[alarmCode.toUpperCase()];
-    
     if (!alarmType) {
-      // Try to determine if it's a status/command response
       if (protocolId >= '80' && protocolId <= 'FF') {
         alarmType = `Command Response ${parseInt(alarmCode, 16)}`;
       } else if (parseInt(alarmCode, 16) >= 0x40 && parseInt(alarmCode, 16) <= 0x7F) {
@@ -493,7 +433,6 @@ var adapter = function (device) {
       }
     }
     
-    // Check if this might be a false alarm (repeated patterns, zero coordinates, etc.)
     if (this.is_false_alarm(alarmCode, rawData)) {
       alarmType = `Status Report (${alarmType})`;
     }
@@ -502,32 +441,23 @@ var adapter = function (device) {
   };
 
   this.is_false_alarm = function(alarmCode, rawData) {
-    // Detect false alarms based on patterns
     if (!rawData || rawData.length < 20) return false;
-    
-    // Check for zero coordinates (common in false alarms)
     const latHex = rawData.substr(14, 8);
     const lngHex = rawData.substr(22, 8);
-    
     if (latHex === '00000000' && lngHex === '00000000') {
       console.log('Zero coordinates detected - likely status report');
       return true;
     }
-    
-    // Check for repeated alarm codes in status reports
     const statusReportCodes = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09'];
     if (statusReportCodes.includes(alarmCode)) {
-      // Check if this is part of regular status reporting
       const statusByte = rawData.substr(36, 2);
       if (statusByte === '00' || statusByte === '01') {
         return true;
       }
     }
-    
     return false;
   };
 
-  // Other methods remain the same
   this.zeroPad = function (nNum, nPad) {
     return ('' + (Math.pow(10, nPad) + nNum)).slice(1);
   };
