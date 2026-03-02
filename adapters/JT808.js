@@ -47,6 +47,7 @@ const adapter = function (device) {
   // ------------------------------------------------------------------------
   this.parse_data = function (data) {
     data = data.toString('hex');
+    logger.debug(`JT808 parse_data: raw hex=${data}`);
 
     if (data.length < 26) {
       logger.error('Message too short:', data);
@@ -68,7 +69,7 @@ const adapter = function (device) {
     // Determine action based on command
     switch (parts.cmd) {
       case '0100': parts.action = 'register'; break;
-      case '0002': parts.action = 'heartbeat'; break;          // changed from 'hbt'
+      case '0002': parts.action = 'heartbeat'; break;
       case '0102': parts.action = 'login_request'; break;
       case '0003': parts.action = 'logout'; break;
       case '0200':
@@ -102,7 +103,9 @@ const adapter = function (device) {
     for (let i = 0; i < bytes.length; i++) {
       xor ^= parseInt(bytes[i], 16);
     }
-    return xor.toString(16).padStart(2, '0').toUpperCase();
+    const checksum = xor.toString(16).padStart(2, '0').toUpperCase();
+    logger.debug(`calcChecksum: packet=${packet} -> ${checksum}`);
+    return checksum;
   };
 
   // ------------------------------------------------------------------------
@@ -122,20 +125,23 @@ const adapter = function (device) {
   this.getNextOtherSerial = function () {
     const serial = this.otherSerial.toString(16).padStart(4, '0').toUpperCase();
     this.otherSerial = (this.otherSerial + 1) & 0xFFFF;
+    logger.debug(`getNextOtherSerial: ${serial}`);
     return serial;
   };
 
   this.first_time = function (message_serial_number, msgParts) {
-    logger.debug(`First time connection for device: ${msgParts.device_id}`);
+    logger.debug(`first_time called for device: ${this.device.getUID()}`);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
   // Heartbeat handler
   this.hbt = async function (message_serial_number, msgParts) {
+    logger.debug(`hbt called for device: ${this.device.getUID()}`);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
   this.register = async function (message_serial_number, msgParts) {
+    logger.debug(`register called for device: ${this.device.getUID()}`);
     try {
       const provinceId = parseInt(msgParts.data.substring(0, 4), 16);
       const cityId = parseInt(msgParts.data.substring(4, 8), 16);
@@ -148,6 +154,7 @@ const adapter = function (device) {
       msgParts.parsed_register = {
         provinceId, cityId, manufacturerId, terminalType, terminalId, plateColor, vinOrPlate
       };
+      logger.debug(`register parsed: provinceId=${provinceId}, cityId=${cityId}, terminalId=${terminalId}`);
 
       this.send_response('8100', msgParts, message_serial_number, '00');
     } catch (error) {
@@ -157,9 +164,11 @@ const adapter = function (device) {
   };
 
   this.authorize = async function (message_serial_number, msgParts) {
+    logger.debug(`authorize called for device: ${this.device.getUID()}`);
     try {
       const authCode = Buffer.from(msgParts.data, 'hex').toString();
       msgParts.parsed_auth = { authCode };
+      logger.debug(`authorize authCode=${authCode}`);
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
       logger.error('Authentication parsing failed:', error);
@@ -168,11 +177,12 @@ const adapter = function (device) {
   };
 
   this.logout = async function (message_serial_number, msgParts) {
-    logger.info(`Device logout: ${msgParts.device_id}`);
+    logger.info(`logout called for device: ${msgParts.device_id}`);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
   this.parse_location_data = function (dataStr) {
+    logger.debug(`parse_location_data: ${dataStr}`);
     if (!dataStr || dataStr.length < 56) {
       logger.error('Location data too short:', dataStr);
       return null;
@@ -210,6 +220,7 @@ const adapter = function (device) {
       remaining = remaining.substring(4 + infoLen);
     }
 
+    logger.debug(`parse_location_data: lat=${latitude}, lng=${longitude}, speed=${speed}`);
     return {
       alarm_flag: alarmFlag,
       status: status,
@@ -224,6 +235,7 @@ const adapter = function (device) {
   };
 
   this.location_report = async function (message_serial_number, msgParts) {
+    logger.debug(`location_report called for device: ${this.device.getUID()}`);
     try {
       const loc = this.parse_location_data(msgParts.data);
       if (!loc) throw new Error('Failed to parse location data');
@@ -236,6 +248,7 @@ const adapter = function (device) {
   };
 
   this.alarm_report = async function (message_serial_number, msgParts) {
+    logger.debug(`alarm_report called for device: ${this.device.getUID()}`);
     try {
       const loc = this.parse_location_data(msgParts.data);
       if (!loc) throw new Error('Failed to parse alarm data');
@@ -286,8 +299,10 @@ const adapter = function (device) {
   };
 
   this.get_ping_data = function (msg_parts) {
+    logger.debug(`get_ping_data called for device: ${this.device.getUID()}`);
     const loc = this.parse_location_data(msg_parts.data);
     if (!loc) {
+      logger.warn('get_ping_data: location parsing failed, returning zeros');
       return {
         latitude: 0, longitude: 0, device_id: msg_parts.device_id,
         date: new Date(), speed: 0, orientation: 0
@@ -313,8 +328,10 @@ const adapter = function (device) {
   };
 
   this.receive_alarm = function (msg_parts) {
+    logger.debug(`receive_alarm called for device: ${this.device.getUID()}`);
     const loc = this.parse_location_data(msg_parts.data);
     const alarmType = this.get_alarm_type(loc.alarm_flag);
+    logger.debug(`receive_alarm: alarmType=${alarmType}, flag=${loc.alarm_flag}`);
     return {
       device_id: msg_parts.device_id,
       alarm_type: alarmType,
@@ -333,6 +350,7 @@ const adapter = function (device) {
   };
 
   this.batch_location = async function (message_serial_number, msgParts) {
+    logger.debug(`batch_location called for device: ${this.device.getUID()}`);
     try {
       const numItems = parseInt(msgParts.data.substring(0, 4), 16);
       const locationType = parseInt(msgParts.data.substring(4, 6), 16);
@@ -354,6 +372,7 @@ const adapter = function (device) {
       }
 
       msgParts.parsed_batch = locations;
+      logger.debug(`batch_location: parsed ${locations.length} locations`);
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
       logger.error('Batch location parsing failed:', error);
@@ -362,6 +381,7 @@ const adapter = function (device) {
   };
 
   this.driver_info = async function (message_serial_number, msgParts) {
+    logger.debug(`driver_info called for device: ${this.device.getUID()}`);
     try {
       const status = parseInt(msgParts.data.substring(0, 2), 16);
       const time = parseBCDTimestamp(msgParts.data.substring(2, 14));
@@ -401,7 +421,7 @@ const adapter = function (device) {
   };
 
   this.run_other = function (cmd, msg_parts) {
-    logger.debug(`Running other command: ${cmd}`);
+    logger.debug(`run_other called for device: ${this.device.getUID()}, cmd=${cmd}`);
     const serial = this.getNextOtherSerial();
 
     switch (cmd) {
@@ -426,10 +446,11 @@ const adapter = function (device) {
   };
 
   this.request_login_to_device = function () {
-    logger.debug('Requesting login from device');
+    logger.debug(`request_login_to_device called (not implemented)`);
   };
 
   this.set_refresh_time = function (interval, duration) {
+    logger.debug(`set_refresh_time called (not implemented)`);
     const hours = Math.floor(duration / 3600);
     const minutes = Math.floor((duration - hours * 3600) / 60);
     const time =

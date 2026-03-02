@@ -11,7 +11,7 @@ var adapter = function (device) {
     return new adapter(device);
   }
 
-  this.format = {'start': '(', 'end': ')', 'separator': ''};
+  this.format = {'start': '78', 'end': '0d0a', 'separator': ''}; // Note: start is '78' (two bytes: '7878' will be found as two consecutive '78' in the buffer)
   this.device = device;
   this.__count = 1;
 
@@ -80,6 +80,7 @@ var adapter = function (device) {
     } else {
       parts['data_body'] = data;
     }
+    logger.debug(`extract_serial_crc: serial=${parts['serial_number']}, crc=${parts['crc']}`);
   };
 
   this.map_protocol_to_action = function(parts) {
@@ -110,6 +111,7 @@ var adapter = function (device) {
     const mapping = protocolMap[parts['protocol_id']] || protocolMap['default'];
     parts.cmd = mapping.cmd;
     parts.action = mapping.action;
+    logger.debug(`map_protocol_to_action: protocol=${parts['protocol_id']} -> cmd=${parts.cmd}, action=${parts.action}`);
   };
 
   this.bufferToHexString = function (buffer) {
@@ -125,10 +127,13 @@ var adapter = function (device) {
   this.buildResponse = function (protocol, serial) {
     const withoutCRC = '7878' + '05' + protocol + serial;
     const crc = f.crc16(Buffer.from(withoutCRC, 'hex'));
-    return withoutCRC + crc + '0D0A';
+    const response = withoutCRC + crc + '0D0A';
+    logger.debug(`buildResponse: protocol=${protocol}, serial=${serial}, response=${response}`);
+    return response;
   };
 
   this.authorize = function (msg_parts) {
+    logger.debug(`authorize called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const response = this.buildResponse('01', serial);
     logger.debug(`Sending login response: ${response}`);
@@ -136,6 +141,7 @@ var adapter = function (device) {
   };
 
   this.receive_heartbeat = function (msg_parts) {
+    logger.debug(`receive_heartbeat called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const response = this.buildResponse('13', serial);
     logger.debug(`Sending heartbeat response: ${response}`);
@@ -143,6 +149,7 @@ var adapter = function (device) {
   };
 
   this.send_alarm_response = function (msg_parts) {
+    logger.debug(`send_alarm_response called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id; // use same protocol as received
     const response = this.buildResponse(protocol, serial);
@@ -154,6 +161,7 @@ var adapter = function (device) {
    ENHANCED LOCATION DATA PARSING
    *******************************************/
   this.get_ping_data = function (msg_parts) {
+    logger.debug(`get_ping_data called for device: ${this.device.getUID()}`);
     try {
       var str = msg_parts.data_body || msg_parts.data;
       logger.debug(`Parsing location data, length: ${str.length}`);
@@ -173,6 +181,7 @@ var adapter = function (device) {
   };
 
   this.parse_standard_gps_data = function (str, msg_parts) {
+    logger.debug(`parse_standard_gps_data: data=${str}`);
     const dateHex = str.substr(0, 12);
     const year = parseInt(dateHex.substr(0, 2), 16) + 2000;
     const month = parseInt(dateHex.substr(2, 2), 16);
@@ -251,6 +260,7 @@ var adapter = function (device) {
   };
 
   this.parse_compact_gps_data = function (str, msg_parts) {
+    logger.debug(`parse_compact_gps_data: data=${str}`);
     const date = new Date();
     let latitude = 0;
     let longitude = 0;
@@ -296,6 +306,7 @@ var adapter = function (device) {
    COMPREHENSIVE ALARM PARSING FOR ALL GT06 VARIANTS
    *******************************************/
   this.receive_alarm = function (msg_parts) {
+    logger.debug(`receive_alarm called for device: ${this.device.getUID()}`);
     try {
       var str = msg_parts.data_body || msg_parts.data;
       logger.debug(`Parsing alarm data, protocol: ${msg_parts.protocol_id} length: ${str.length}`);
@@ -379,6 +390,7 @@ var adapter = function (device) {
           }
         }
     }
+    logger.debug(`extract_alarm_code: protocol=${protocolId}, alarmCode=${alarmCode}`);
     return alarmCode.toUpperCase();
   };
 
@@ -439,6 +451,7 @@ var adapter = function (device) {
       alarmType = `Status Report (${alarmType})`;
     }
 
+    logger.debug(`map_alarm_code: alarmCode=${alarmCode} -> ${alarmType}`);
     return alarmType;
   };
 
@@ -465,6 +478,7 @@ var adapter = function (device) {
   };
 
   this.synchronous_clock = function (msg_parts) {
+    logger.debug(`synchronous_clock called (not implemented)`);
     // Not implemented
   };
 
@@ -473,10 +487,12 @@ var adapter = function (device) {
   };
 
   this.request_login_to_device = function () {
+    logger.debug(`request_login_to_device called (not implemented)`);
     // Not implemented
   };
 
   this.set_refresh_time = function (interval, duration) {
+    logger.debug(`set_refresh_time called (not implemented)`);
     // Not implemented
   };
 };
