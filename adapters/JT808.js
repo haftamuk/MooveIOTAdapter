@@ -1,5 +1,6 @@
 // File: UT04SAdapter/node_modules/gps-tracking/lib/adapters/JT808.js
 const f = require('../lib/functions');
+const logger = require('../lib/logger'); // <-- added
 
 exports.protocol = 'JT808';
 exports.model_name = 'JT808';
@@ -48,7 +49,7 @@ const adapter = function (device) {
     data = data.toString('hex');
 
     if (data.length < 26) {
-      console.error('Message too short:', data);
+      logger.error('Message too short:', data);
       return false;
     }
 
@@ -81,13 +82,13 @@ const adapter = function (device) {
       default: parts.action = 'other';
     }
 
-    console.log('========================================');
-    console.log('UT04S.JS PARSED DATA');
-    console.log('Command:', parts.cmd, 'Action:', parts.action);
-    console.log('Device ID:', parts.device_id);
-    console.log('Sequence:', parts.cmd_serial_no);
-    console.log('Data length:', parts.data.length / 2, 'bytes');
-    console.log('========================================');
+    logger.debug('========================================');
+    logger.debug('UT04S.JS PARSED DATA');
+    logger.debug(`Command: ${parts.cmd} Action: ${parts.action}`);
+    logger.debug(`Device ID: ${parts.device_id}`);
+    logger.debug(`Sequence: ${parts.cmd_serial_no}`);
+    logger.debug(`Data length: ${parts.data.length / 2} bytes`);
+    logger.debug('========================================');
 
     return parts;
   };
@@ -111,10 +112,10 @@ const adapter = function (device) {
     const core = '8001' + '0005' + msgParts.device_id + message_serial_number + msgParts.cmd_serial_no + msgParts.cmd + result;
     const checksum = this.calcChecksum(core);
     const response = msgParts.start + core + checksum + msgParts.finish;
-    console.log('========================================');
-    console.log('UT04S.JS SENDING RESPONSE TO DEVICE');
-    console.log('Response:', response.toUpperCase());
-    console.log('========================================');
+    logger.debug('========================================');
+    logger.debug('UT04S.JS SENDING RESPONSE TO DEVICE');
+    logger.debug(`Response: ${response.toUpperCase()}`);
+    logger.debug('========================================');
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -125,7 +126,7 @@ const adapter = function (device) {
   };
 
   this.first_time = function (message_serial_number, msgParts) {
-    console.log('First time connection for device:', msgParts.device_id);
+    logger.debug(`First time connection for device: ${msgParts.device_id}`);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
@@ -150,7 +151,7 @@ const adapter = function (device) {
 
       this.send_response('8100', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Registration parsing failed:', error);
+      logger.error('Registration parsing failed:', error);
       this.send_response('8100', msgParts, message_serial_number, '01');
     }
   };
@@ -161,19 +162,19 @@ const adapter = function (device) {
       msgParts.parsed_auth = { authCode };
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Authentication parsing failed:', error);
+      logger.error('Authentication parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '01');
     }
   };
 
   this.logout = async function (message_serial_number, msgParts) {
-    console.log('Device logout:', msgParts.device_id);
+    logger.info(`Device logout: ${msgParts.device_id}`);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
   this.parse_location_data = function (dataStr) {
     if (!dataStr || dataStr.length < 56) {
-      console.error('Location data too short:', dataStr);
+      logger.error('Location data too short:', dataStr);
       return null;
     }
 
@@ -229,7 +230,7 @@ const adapter = function (device) {
       msgParts.parsed_location = loc;
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Location report parsing failed:', error);
+      logger.error('Location report parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
@@ -242,7 +243,7 @@ const adapter = function (device) {
       msgParts.parsed_alarm = { loc, alarmType };
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Alarm report parsing failed:', error);
+      logger.error('Alarm report parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
@@ -335,7 +336,7 @@ const adapter = function (device) {
     try {
       const numItems = parseInt(msgParts.data.substring(0, 4), 16);
       const locationType = parseInt(msgParts.data.substring(4, 6), 16);
-      console.log(`Batch location upload: ${numItems} items, type: ${locationType}`);
+      logger.debug(`Batch location upload: ${numItems} items, type: ${locationType}`);
 
       let offset = 6;
       const locations = [];
@@ -355,7 +356,7 @@ const adapter = function (device) {
       msgParts.parsed_batch = locations;
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Batch location parsing failed:', error);
+      logger.error('Batch location parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
@@ -391,15 +392,16 @@ const adapter = function (device) {
       }
 
       msgParts.parsed_driver = driverInfo;
+      logger.debug('Driver info received:', driverInfo);
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Driver info parsing failed:', error);
+      logger.error('Driver info parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
 
   this.run_other = function (cmd, msg_parts) {
-    console.log(`Running other command: ${cmd}`);
+    logger.debug(`Running other command: ${cmd}`);
     const serial = this.getNextOtherSerial();
 
     switch (cmd) {
@@ -414,17 +416,17 @@ const adapter = function (device) {
         break;
       case '0800':
       case '0801':
-        console.log('Multimedia data received – not implemented');
+        logger.debug('Multimedia data received – not implemented');
         this.send_response('8001', msg_parts, serial, '03');
         break;
       default:
-        console.log(`Unknown command: ${cmd}`);
+        logger.debug(`Unknown command: ${cmd}`);
         this.send_response('8001', msg_parts, serial, '03');
     }
   };
 
   this.request_login_to_device = function () {
-    console.log('Requesting login from device');
+    logger.debug('Requesting login from device');
   };
 
   this.set_refresh_time = function (interval, duration) {

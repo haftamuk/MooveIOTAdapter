@@ -10,6 +10,7 @@ require('dotenv').config({
   path: path.resolve(__dirname, envFile)
 });
 
+const logger = require('./lib/logger'); // <-- added
 const gps = require('./lib/server');
 
 // ============================================================================
@@ -88,6 +89,7 @@ function cleanupProxySockets(deviceId) {
     if (sockets.crs) sockets.crs.destroy();
     if (sockets.gpspos) sockets.gpspos.destroy();
     deviceProxySockets.delete(deviceId);
+    logger.debug(`Proxy sockets cleaned up for device ${deviceId}`);
   }
 }
 
@@ -122,8 +124,11 @@ function forwardToProxy(deviceId, rawHex, serverType) {
 
     if (!sockets.crs || sockets.crs.destroyed) {
       sockets.crs = new net.Socket();
-      sockets.crs.connect(crsPort, process.env.CRS_SERVER, () => {});
-      sockets.crs.on('error', () => {
+      sockets.crs.connect(crsPort, process.env.CRS_SERVER, () => {
+        logger.debug(`CRS proxy connected for device ${deviceId}`);
+      });
+      sockets.crs.on('error', (err) => {
+        logger.error(`CRS proxy error for device ${deviceId}: ${err.message}`, { error: err });
         if (sockets.crs) sockets.crs.destroy();
         sockets.crs = null;
         setTimeout(() => {
@@ -146,8 +151,11 @@ function forwardToProxy(deviceId, rawHex, serverType) {
 
     if (!sockets.gpspos || sockets.gpspos.destroyed) {
       sockets.gpspos = new net.Socket();
-      sockets.gpspos.connect(gpsposPort, process.env.GPSPOS_SERVER, () => {});
-      sockets.gpspos.on('error', () => {
+      sockets.gpspos.connect(gpsposPort, process.env.GPSPOS_SERVER, () => {
+        logger.debug(`GPSPOS proxy connected for device ${deviceId}`);
+      });
+      sockets.gpspos.on('error', (err) => {
+        logger.error(`GPSPOS proxy error for device ${deviceId}: ${err.message}`, { error: err });
         if (sockets.gpspos) sockets.gpspos.destroy();
         sockets.gpspos = null;
         setTimeout(() => {
@@ -181,11 +189,13 @@ async function sendToAPI(endpoint, data) {
     });
 
     if (!response.ok) {
+      logger.warn(`API call to ${endpoint} returned ${response.status}`, { status: response.status, data });
       return null;
     }
 
     return await response.json();
   } catch (error) {
+    logger.error(`API call failed to ${endpoint}: ${error.message}`, { error });
     return null;
   }
 }
@@ -213,22 +223,26 @@ const baseServerOptions = {
  */
 function setupDeviceHandlers(device, connection, serverType) {
   device.on('connected', () => {
-    // Empty handler per requirement
+    logger.debug(`Device connected (${serverType})`);
   });
 
   device.on('disconnected', () => {
     const devId = device.getUID();
-    if (devId) cleanupProxySockets(devId);
+    if (devId) {
+      cleanupProxySockets(devId);
+      logger.debug(`Device ${devId} disconnected (${serverType})`);
+    }
   });
 
   device.on('new_device_first_time', (device_id, msg_parts) => {
+    logger.debug(`New device first time: ${device_id}`, { device_id, msg_parts });
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
-    // Optionally log or handle
   });
 
   device.on('register', (device_id, msg_parts) => {
     device.new_device_register(msg_parts);
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    logger.info(`Device registered: ${device_id}`, { device_id });
 
     const reg = msg_parts.parsed_register || {};
     sendToAPI(API_ENDPOINTS.LOGIN, {
@@ -246,6 +260,7 @@ function setupDeviceHandlers(device, connection, serverType) {
   device.on('login_request', (device_id, msg_parts) => {
     device.login_authorized(true, msg_parts);
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    logger.info(`Login request from ${device_id}`, { device_id });
 
     const auth = msg_parts.parsed_auth || {};
     sendToAPI(API_ENDPOINTS.LOGIN, {
@@ -268,6 +283,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       device.adapter.receive_heartbeat(msg_parts);
     }
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    logger.debug(`Heartbeat from ${device_id}`, { device_id });
     sendToAPI(API_ENDPOINTS.HEARTBEAT, {
       device_id,
       online: true,
@@ -277,11 +293,10 @@ function setupDeviceHandlers(device, connection, serverType) {
     }).catch(() => {});
   });
 
-
   device.on('logout', (device_id, msg_parts) => {
     device.logout(msg_parts);
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
-    // No API call for logout
+    logger.info(`Device logout: ${device_id}`, { device_id });
   });
 
   device.on('ping', (data, msg_parts) => {
@@ -289,6 +304,11 @@ function setupDeviceHandlers(device, connection, serverType) {
       device.received_location_report(msg_parts);
     }
     forwardToProxy(data.device_id, msg_parts.raw_hex, serverType);
+    logger.debug(`Location from ${data.device_id}`, {
+      device_id: data.device_id,
+      latitude: data.latitude,
+      longitude: data.longitude
+    });
 
     const payload = {
       device_id: data.device_id,
@@ -313,7 +333,7 @@ function setupDeviceHandlers(device, connection, serverType) {
     sendToAPI(API_ENDPOINTS.LOCATION, payload).catch(() => {});
   });
 
-device.on('alarm', (alarmData, msg_parts) => {
+  device.on('alarm', (alarmData, msg_parts) => {
     if (serverType === 'ut04s') {
       device.received_alarm_report(msg_parts);
     } else {
@@ -321,6 +341,7 @@ device.on('alarm', (alarmData, msg_parts) => {
       device.adapter.send_alarm_response(msg_parts);
     }
     forwardToProxy(alarmData.device_id, msg_parts.raw_hex, serverType);
+    logger.warn(`Alarm from ${alarmData.device_id}: ${alarmData.alarm_type}`, { alarmData });
 
     const alarmPayload = {
       device_id: alarmData.device_id,
@@ -384,11 +405,11 @@ device.on('alarm', (alarmData, msg_parts) => {
     }
     // Handle JT808 driver info (0x0702)
     else if (serverType === 'ut04s' && msg_parts.cmd === '0702' && msg_parts.parsed_driver) {
-      console.log('Driver info received:', msg_parts.parsed_driver);
+      logger.debug('Driver info received:', msg_parts.parsed_driver);
     }
     // For GT06, other commands (like lbs_location, status) are just forwarded and logged
     else {
-      console.log(`Unhandled other command for ${serverType}:`, msg_parts.cmd, msg_parts.original_action);
+      logger.debug(`Unhandled other command for ${serverType}: ${msg_parts.cmd}`, { msg_parts });
     }
   });
 }
@@ -411,13 +432,20 @@ function startUT04SServer() {
   const ut04sServer = gps.server(ut04sOptions, (device, connection) => {
     setupDeviceHandlers(device, connection, 'ut04s');
 
-    // Additional empty handlers per requirement
-    connection.on('error', () => {});
-    connection.on('close', () => {});
-    connection.on('timeout', () => {}); // added missing timeout handler
+    connection.on('error', (err) => {
+      logger.error(`UT04S connection error for device ${device.getUID ? device.getUID() : 'unknown'}: ${err.message}`, { error: err });
+    });
+    connection.on('close', () => {
+      logger.debug(`UT04S connection closed for device ${device.getUID ? device.getUID() : 'unknown'}`);
+    });
+    connection.on('timeout', () => {
+      logger.warn(`UT04S connection timeout for device ${device.getUID ? device.getUID() : 'unknown'}`);
+    });
   });
 
-  ut04sServer.on('error', () => {}); // empty handler
+  ut04sServer.on('error', (err) => {
+    logger.error(`UT04S server error: ${err.message}`, { error: err });
+  });
 
   return ut04sServer;
 }
@@ -440,12 +468,20 @@ function startGT06Server() {
   const gt06Server = gps.server(gt06Options, (device, connection) => {
     setupDeviceHandlers(device, connection, 'gt06');
 
-    connection.on('error', () => {});
-    connection.on('close', () => {});
-    connection.on('timeout', () => {});
+    connection.on('error', (err) => {
+      logger.error(`GT06 connection error for device ${device.getUID ? device.getUID() : 'unknown'}: ${err.message}`, { error: err });
+    });
+    connection.on('close', () => {
+      logger.debug(`GT06 connection closed for device ${device.getUID ? device.getUID() : 'unknown'}`);
+    });
+    connection.on('timeout', () => {
+      logger.warn(`GT06 connection timeout for device ${device.getUID ? device.getUID() : 'unknown'}`);
+    });
   });
 
-  gt06Server.on('error', () => {});
+  gt06Server.on('error', (err) => {
+    logger.error(`GT06 server error: ${err.message}`, { error: err });
+  });
 
   return gt06Server;
 }
@@ -456,6 +492,11 @@ function startGT06Server() {
 const ut04sServer = startUT04SServer();
 const gt06Server = startGT06Server();
 
+logger.info('GPS servers started', {
+  ut04s_port: process.env.GPS_SERVER_PORT_JT808,
+  gt06_port: process.env.GPS_SERVER_PORT_GT06
+});
+
 // ============================================================================
 // Graceful shutdown
 // ============================================================================
@@ -465,6 +506,8 @@ const gt06Server = startGT06Server();
  * @param {string} signal - The signal that triggered the shutdown.
  */
 function gracefulShutdown(signal) {
+  logger.info(`Received ${signal}, shutting down gracefully...`);
+
   const closeServer = (server) => {
     if (server && typeof server.close === 'function') {
       server.close(() => {});
@@ -477,6 +520,7 @@ function gracefulShutdown(signal) {
   closeServer(gt06Server);
 
   setTimeout(() => {
+    logger.info('Shutdown complete.');
     process.exit(0);
   }, 3000);
 }
@@ -484,6 +528,10 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Global error handlers (empty per requirement)
-process.on('uncaughtException', (err) => {});
-process.on('unhandledRejection', (reason, promise) => {});
+// Global error handlers
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught Exception', { error: err });
+});
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection', { reason, promise });
+});

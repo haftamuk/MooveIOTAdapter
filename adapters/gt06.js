@@ -1,5 +1,7 @@
 /* Comprehensive GT06 Protocol Adapter with Enhanced Alarm Parsing */
 const f = require('../lib/functions');
+const logger = require('../lib/logger'); // <-- added
+
 exports.protocol = 'GT06N';
 exports.model_name = 'GT06N';
 exports.compatible_hardware = ['GT06N', 'GT06', 'GT06E', 'GT06F', 'GT06H'];
@@ -19,10 +21,10 @@ var adapter = function (device) {
   this.parse_data = function (data) {
     try {
       var hexData = this.bufferToHexString(data);
-      console.log('Raw hex data received:', hexData);
-      
+      logger.debug(`Raw hex data received: ${hexData}`);
+
       if (hexData.length < 10) {
-        console.log('Packet too short');
+        logger.debug('Packet too short');
         return { cmd: 'noop', action: 'noop', device_id: '' };
       }
 
@@ -32,25 +34,25 @@ var adapter = function (device) {
       };
 
       if (parts['start'] !== '7878' && parts['start'] !== '7979') {
-        console.log('Invalid start bytes:', parts['start']);
+        logger.debug(`Invalid start bytes: ${parts['start']}`);
         return { cmd: 'noop', action: 'noop', device_id: '' };
       }
 
       parts['length'] = parseInt(hexData.substr(4, 2), 16);
-      
+
       const minExpectedLength = 4 + 2 + (parts['length'] * 2) + 4;
       if (hexData.length < minExpectedLength) {
-        console.log(`Incomplete packet: ${hexData.length}/${minExpectedLength}`);
+        logger.debug(`Incomplete packet: ${hexData.length}/${minExpectedLength}`);
         return { cmd: 'noop', action: 'noop', device_id: '' };
       }
 
       parts['protocol_id'] = hexData.substr(6, 2).toLowerCase();
-      console.log('Protocol ID:', parts['protocol_id']);
-      
+      logger.debug(`Protocol ID: ${parts['protocol_id']}`);
+
       const dataStart = 8; // After start(4) + length(2) + protocol(2)
       const dataEnd = 8 + (parts['length'] - 1) * 2;
       parts['data'] = hexData.substring(dataStart, dataStart + (parts['length'] - 1) * 2);
-      
+
       this.extract_serial_crc(parts);
       this.map_protocol_to_action(parts);
 
@@ -60,10 +62,10 @@ var adapter = function (device) {
         parts['device_id'] = '';
       }
 
-      console.log(`Parsed: Protocol=${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
+      logger.debug(`Parsed: Protocol=${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
       return parts;
     } catch (error) {
-      console.error('Error parsing data:', error);
+      logger.error('Error parsing data:', error);
       return { cmd: 'noop', action: 'noop', device_id: '' };
     }
   };
@@ -129,14 +131,14 @@ var adapter = function (device) {
   this.authorize = function (msg_parts) {
     const serial = msg_parts.serial_number || '0001';
     const response = this.buildResponse('01', serial);
-    console.log('Sending login response:', response);
+    logger.debug(`Sending login response: ${response}`);
     this.device.send(Buffer.from(response, 'hex'));
   };
-  
+
   this.receive_heartbeat = function (msg_parts) {
     const serial = msg_parts.serial_number || '0001';
     const response = this.buildResponse('13', serial);
-    console.log('Sending heartbeat response:', response);
+    logger.debug(`Sending heartbeat response: ${response}`);
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -144,7 +146,7 @@ var adapter = function (device) {
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id; // use same protocol as received
     const response = this.buildResponse(protocol, serial);
-    console.log('Sending alarm response:', response);
+    logger.debug(`Sending alarm response: ${response}`);
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -154,18 +156,18 @@ var adapter = function (device) {
   this.get_ping_data = function (msg_parts) {
     try {
       var str = msg_parts.data_body || msg_parts.data;
-      console.log('Parsing location data, length:', str.length);
-      
+      logger.debug(`Parsing location data, length: ${str.length}`);
+
       if (str.length >= 38) {
         return this.parse_standard_gps_data(str, msg_parts);
       } else if (str.length >= 20) {
         return this.parse_compact_gps_data(str, msg_parts);
       } else {
-        console.error('GPS data too short:', str.length);
+        logger.error(`GPS data too short: ${str.length}`);
         return false;
       }
     } catch (error) {
-      console.error('Error parsing ping data:', error);
+      logger.error('Error parsing ping data:', error);
       return false;
     }
   };
@@ -179,23 +181,23 @@ var adapter = function (device) {
     const minute = parseInt(dateHex.substr(8, 2), 16);
     const second = parseInt(dateHex.substr(10, 2), 16);
     const date = new Date(year, month - 1, day, hour, minute, second);
-    
+
     const satellites = parseInt(str.substr(12, 2), 16);
-    
+
     const latHex = str.substr(14, 8);
     let latitude = 0;
     if (latHex !== '00000000') {
       latitude = parseInt(latHex, 16) / 1800000;
     }
-    
+
     const lngHex = str.substr(22, 8);
     let longitude = 0;
     if (lngHex !== '00000000') {
       longitude = parseInt(lngHex, 16) / 1800000;
     }
-    
+
     const speed = parseInt(str.substr(30, 2), 16);
-    
+
     const courseHex = str.substr(32, 4);
     let course = parseInt(courseHex, 16);
     if (course > 360) {
@@ -203,7 +205,7 @@ var adapter = function (device) {
       course = (course * 360) / 255;
     }
     course = Math.round(course);
-    
+
     let statusByte = 0;
     let statusBinary = '00000000';
     if (str.length >= 38) {
@@ -213,7 +215,7 @@ var adapter = function (device) {
       statusByte = parseInt(str.substr(28, 2), 16);
       statusBinary = statusByte.toString(2).padStart(8, '0');
     }
-    
+
     const data = {
       device_id: msg_parts.device_id || '',
       date: date.toISOString(),
@@ -235,8 +237,8 @@ var adapter = function (device) {
         alarm_bits: statusBinary.substr(2, 3)
       }
     };
-    
-    console.log('Parsed location:', {
+
+    logger.debug('Parsed location:', {
       device: data.device_id,
       lat: data.latitude,
       lng: data.longitude,
@@ -244,7 +246,7 @@ var adapter = function (device) {
       course: data.orientation,
       time: data.date
     });
-    
+
     return data;
   };
 
@@ -253,7 +255,7 @@ var adapter = function (device) {
     let latitude = 0;
     let longitude = 0;
     let speed = 0;
-    
+
     if (str.length >= 20) {
       try {
         const latPart = str.substr(0, 8);
@@ -266,10 +268,10 @@ var adapter = function (device) {
           speed = parseInt(str.substr(16, 2), 16);
         }
       } catch (e) {
-        console.error('Error parsing compact GPS:', e);
+        logger.error('Error parsing compact GPS:', e);
       }
     }
-    
+
     return {
       device_id: msg_parts.device_id || '',
       date: date.toISOString(),
@@ -296,17 +298,17 @@ var adapter = function (device) {
   this.receive_alarm = function (msg_parts) {
     try {
       var str = msg_parts.data_body || msg_parts.data;
-      console.log('Parsing alarm data, protocol:', msg_parts.protocol_id, 'length:', str.length);
-      
+      logger.debug(`Parsing alarm data, protocol: ${msg_parts.protocol_id} length: ${str.length}`);
+
       const gpsData = this.parse_standard_gps_data(str, msg_parts);
       if (!gpsData) {
-        console.error('Failed to parse GPS data for alarm');
+        logger.error('Failed to parse GPS data for alarm');
         return false;
       }
-      
+
       let alarmCode = this.extract_alarm_code(str, msg_parts.protocol_id);
       const alarmType = this.map_alarm_code(alarmCode, msg_parts.protocol_id, str);
-      
+
       const data = {
         code: alarmType,
         msg: alarmType,
@@ -324,18 +326,18 @@ var adapter = function (device) {
         device_status: gpsData.device_status,
         protocol_id: msg_parts.protocol_id
       };
-      
-      console.log('Parsed alarm:', {
+
+      logger.debug('Parsed alarm:', {
         device: data.device_id,
         alarm: data.alarm_type,
         code: alarmCode,
         lat: data.latitude,
         lng: data.longitude
       });
-      
+
       return data;
     } catch (error) {
-      console.error('Error parsing alarm data:', error);
+      logger.error('Error parsing alarm data:', error);
       return false;
     }
   };
@@ -419,7 +421,7 @@ var adapter = function (device) {
       '22': 'GPS Jamming Detection',
       'FF': 'System Notification 15'
     };
-    
+
     let alarmType = alarmMap[alarmCode.toUpperCase()];
     if (!alarmType) {
       if (protocolId >= '80' && protocolId <= 'FF') {
@@ -432,11 +434,11 @@ var adapter = function (device) {
         alarmType = `Unknown Alarm (${alarmCode})`;
       }
     }
-    
+
     if (this.is_false_alarm(alarmCode, rawData)) {
       alarmType = `Status Report (${alarmType})`;
     }
-    
+
     return alarmType;
   };
 
@@ -445,7 +447,7 @@ var adapter = function (device) {
     const latHex = rawData.substr(14, 8);
     const lngHex = rawData.substr(22, 8);
     if (latHex === '00000000' && lngHex === '00000000') {
-      console.log('Zero coordinates detected - likely status report');
+      logger.debug('Zero coordinates detected - likely status report');
       return true;
     }
     const statusReportCodes = ['00', '01', '02', '03', '04', '05', '06', '07', '08', '09'];
@@ -461,13 +463,13 @@ var adapter = function (device) {
   this.zeroPad = function (nNum, nPad) {
     return ('' + (Math.pow(10, nPad) + nNum)).slice(1);
   };
-  
+
   this.synchronous_clock = function (msg_parts) {
     // Not implemented
   };
-  
+
   this.run_other = function (cmd, msg_parts) {
-    console.log('run_other called with cmd:', cmd);
+    logger.debug(`run_other called with cmd: ${cmd}`);
   };
 
   this.request_login_to_device = function () {
