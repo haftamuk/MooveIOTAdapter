@@ -404,7 +404,7 @@ device.on('alarm', (alarmData, msg_parts) => {
 function startUT04SServer() {
   const ut04sOptions = {
     ...baseServerOptions,
-    port: process.env.GPSPOS_SERVER_PORT_UT04S,
+    port: process.env.GPS_SERVER_PORT_JT808,
     device_adapter: 'JT808',
   };
 
