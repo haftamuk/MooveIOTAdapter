@@ -1,8 +1,8 @@
-// File: UT04SAdapter/node_modules/gps-tracking/lib/adapters/UT04S.js
+// File: UT04SAdapter/node_modules/gps-tracking/lib/adapters/JT808.js
 const f = require('../lib/functions');
 
 exports.protocol = 'JT808';
-exports.model_name = 'UT04S';
+exports.model_name = 'JT808';
 exports.compatible_hardware = ['Integrated GPS Speed Limiter UT04S/unigiard'];
 
 const adapter = function (device) {
@@ -14,9 +14,6 @@ const adapter = function (device) {
     separator: '',
   };
   this.device = device;
-  this.api_base = 'http://localhost:3000/api/gps'; // Update with your actual API base URL
-
-  // Serial counter for "other" commands (per device)
   this.otherSerial = 1;
 
   const converter = {
@@ -33,7 +30,6 @@ const adapter = function (device) {
     return out;
   }
 
-  // Parse BCD timestamp (6 bytes = 12 hex chars)
   function parseBCDTimestamp(bcdTime) {
     if (bcdTime.length !== 12) return new Date();
     const year = '20' + bcdTime.substring(0, 2);
@@ -71,7 +67,7 @@ const adapter = function (device) {
     // Determine action based on command
     switch (parts.cmd) {
       case '0100': parts.action = 'register'; break;
-      case '0002': parts.action = 'hbt'; break;
+      case '0002': parts.action = 'heartbeat'; break;          // changed from 'hbt'
       case '0102': parts.action = 'login_request'; break;
       case '0003': parts.action = 'logout'; break;
       case '0200':
@@ -112,74 +108,32 @@ const adapter = function (device) {
   // Send a general response (0x8001) to the device
   // ------------------------------------------------------------------------
   this.send_response = function (responseCmd, msgParts, message_serial_number, result = '00') {
-    // Build the core part (without start, checksum, end)
     const core = '8001' + '0005' + msgParts.device_id + message_serial_number + msgParts.cmd_serial_no + msgParts.cmd + result;
     const checksum = this.calcChecksum(core);
     const response = msgParts.start + core + checksum + msgParts.finish;
-
     console.log('========================================');
     console.log('UT04S.JS SENDING RESPONSE TO DEVICE');
     console.log('Response:', response.toUpperCase());
     console.log('========================================');
-
     this.device.send(Buffer.from(response, 'hex'));
   };
 
-  // ------------------------------------------------------------------------
-  // Helper to get next serial for "other" responses
-  // ------------------------------------------------------------------------
   this.getNextOtherSerial = function () {
     const serial = this.otherSerial.toString(16).padStart(4, '0').toUpperCase();
-    this.otherSerial = (this.otherSerial + 1) & 0xFFFF; // wrap at 65535
+    this.otherSerial = (this.otherSerial + 1) & 0xFFFF;
     return serial;
   };
 
-  // ------------------------------------------------------------------------
-  // API call wrapper (using fetch, Node.js 18+)
-  // ------------------------------------------------------------------------
-  this.call_api = async function (endpoint, data) {
-    try {
-      const response = await fetch(`${this.api_base}/${endpoint}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data)
-      });
-      if (!response.ok) {
-        throw new Error(`API error: ${response.status} ${response.statusText}`);
-      }
-      return await response.json();
-    } catch (error) {
-      console.error(`API call to ${endpoint} failed:`, error);
-      throw error;
-    }
-  };
-
-  // ------------------------------------------------------------------------
-  // Handle first‑time connection (rare, but implemented)
-  // ------------------------------------------------------------------------
   this.first_time = function (message_serial_number, msgParts) {
     console.log('First time connection for device:', msgParts.device_id);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-  // ------------------------------------------------------------------------
   // Heartbeat handler
-  // ------------------------------------------------------------------------
   this.hbt = async function (message_serial_number, msgParts) {
-    try {
-      await this.call_api('heartbeat', {
-        device_id: msgParts.device_id,
-        timestamp: new Date().toISOString()
-      });
-    } catch (e) {
-      // log but still respond to device
-    }
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-  // ------------------------------------------------------------------------
-  // Registration handler (0x0100) – sends 0x8100 response
-  // ------------------------------------------------------------------------
   this.register = async function (message_serial_number, msgParts) {
     try {
       const provinceId = parseInt(msgParts.data.substring(0, 4), 16);
@@ -190,46 +144,33 @@ const adapter = function (device) {
       const plateColor = parseInt(msgParts.data.substring(72, 74), 16);
       const vinOrPlate = Buffer.from(msgParts.data.substring(74), 'hex').toString();
 
-      console.log('Registration API call triggered:', message_serial_number);
-      // Uncomment when API is ready:
-      // await this.call_api('login', {
-      //   device_id: msgParts.device_id,
-      //   terminal_info: { provinceId, cityId, manufacturerId, terminalType, terminalId, plateColor, vinOrPlate },
-      //   protocol_version: 'JT808',
-      //   ip_address: this.device.ip
-      // });
+      msgParts.parsed_register = {
+        provinceId, cityId, manufacturerId, terminalType, terminalId, plateColor, vinOrPlate
+      };
+
       this.send_response('8100', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Registration API call failed:', error);
+      console.error('Registration parsing failed:', error);
       this.send_response('8100', msgParts, message_serial_number, '01');
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Authentication handler (0x0102)
-  // ------------------------------------------------------------------------
   this.authorize = async function (message_serial_number, msgParts) {
     try {
       const authCode = Buffer.from(msgParts.data, 'hex').toString();
-      // await this.call_api('login', { device_id: msgParts.device_id, auth_code: authCode, ... });
+      msgParts.parsed_auth = { authCode };
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Authentication API call failed:', error);
+      console.error('Authentication parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '01');
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Logout handler
-  // ------------------------------------------------------------------------
   this.logout = async function (message_serial_number, msgParts) {
     console.log('Device logout:', msgParts.device_id);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-  // ------------------------------------------------------------------------
-  // Parse location data from 0x0200 message body
-  // ------------------------------------------------------------------------
   this.parse_location_data = function (dataStr) {
     if (!dataStr || dataStr.length < 56) {
       console.error('Location data too short:', dataStr);
@@ -245,7 +186,6 @@ const adapter = function (device) {
     const direction = parseInt(dataStr.substring(40, 44), 16);
     const timestamp = parseBCDTimestamp(dataStr.substring(44, 56));
 
-    // Parse additional information items
     const additionalInfo = {};
     let remaining = dataStr.substring(56);
     while (remaining.length >= 4) {
@@ -282,104 +222,31 @@ const adapter = function (device) {
     };
   };
 
-  // ------------------------------------------------------------------------
-  // Location report handler (called from device.received_location_report)
-  // ------------------------------------------------------------------------
   this.location_report = async function (message_serial_number, msgParts) {
     try {
       const loc = this.parse_location_data(msgParts.data);
       if (!loc) throw new Error('Failed to parse location data');
-
-      await this.call_api('location', {
-        device_id: msgParts.device_id,
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        speed: loc.speed,
-        course: loc.direction,
-        altitude: loc.altitude,
-        satellites: loc.additional_info.satellites || 0,
-        device_status: {
-          alarm_flag: loc.alarm_flag,
-          status_flags: loc.status,
-          battery: loc.additional_info.battery_percentage,
-          gsm_signal: loc.additional_info.gsm_signal,
-          io_status: loc.additional_info.io_status
-        },
-        timestamp: loc.timestamp.toISOString(),
-        raw_data: msgParts.raw_hex
-      });
-
-      // Optionally send status separately
-      if (loc.additional_info.battery_percentage || loc.additional_info.gsm_signal) {
-        await this.call_api('status', {
-          device_id: msgParts.device_id,
-          voltage: loc.additional_info.battery_percentage ? loc.additional_info.battery_percentage * 0.042 : null,
-          gsm_signal: loc.additional_info.gsm_signal,
-          alarm_zone: loc.alarm_flag > 0 ? 'ALARM' : 'NORMAL',
-          raw_data: msgParts.data
-        });
-      }
-
+      msgParts.parsed_location = loc;
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Location report API call failed:', error);
+      console.error('Location report parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Alarm report handler (called from device.received_alarm_report)
-  // ------------------------------------------------------------------------
   this.alarm_report = async function (message_serial_number, msgParts) {
     try {
       const loc = this.parse_location_data(msgParts.data);
       if (!loc) throw new Error('Failed to parse alarm data');
-
       const alarmType = this.get_alarm_type(loc.alarm_flag);
-
-      await this.call_api('alarm', {
-        device_id: msgParts.device_id,
-        alarm_type: alarmType,
-        alarm_code: loc.alarm_flag,
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        speed: loc.speed,
-        device_status: {
-          alarm_flag: loc.alarm_flag,
-          status_flags: loc.status,
-          battery: loc.additional_info.battery_percentage,
-          gsm_signal: loc.additional_info.gsm_signal
-        },
-        raw_data: msgParts.raw_hex
-      });
-
-      // Also send location for alarm events
-      await this.call_api('location', {
-        device_id: msgParts.device_id,
-        latitude: loc.latitude,
-        longitude: loc.longitude,
-        speed: loc.speed,
-        course: loc.direction,
-        altitude: loc.altitude,
-        satellites: loc.additional_info.satellites || 0,
-        device_status: {
-          alarm_flag: loc.alarm_flag,
-          status_flags: loc.status
-        },
-        timestamp: loc.timestamp.toISOString(),
-        raw_data: msgParts.raw_hex
-      });
-
+      msgParts.parsed_alarm = { loc, alarmType };
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Alarm report API call failed:', error);
+      console.error('Alarm report parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Map alarm flag to alarm type string
-  // ------------------------------------------------------------------------
   this.get_alarm_type = function (alarmFlag) {
     const alarmTypes = {
       0x00000001: 'Emergency',
@@ -417,9 +284,6 @@ const adapter = function (device) {
     return 'UnknownAlarm';
   };
 
-  // ------------------------------------------------------------------------
-  // Backward compatibility: get_ping_data (used by library's ping event)
-  // ------------------------------------------------------------------------
   this.get_ping_data = function (msg_parts) {
     const loc = this.parse_location_data(msg_parts.data);
     if (!loc) {
@@ -447,9 +311,6 @@ const adapter = function (device) {
     };
   };
 
-  // ------------------------------------------------------------------------
-  // Backward compatibility: receive_alarm (used by library's alarm event)
-  // ------------------------------------------------------------------------
   this.receive_alarm = function (msg_parts) {
     const loc = this.parse_location_data(msg_parts.data);
     const alarmType = this.get_alarm_type(loc.alarm_flag);
@@ -470,9 +331,6 @@ const adapter = function (device) {
     };
   };
 
-  // ------------------------------------------------------------------------
-  // Batch location upload (0x0704)
-  // ------------------------------------------------------------------------
   this.batch_location = async function (message_serial_number, msgParts) {
     try {
       const numItems = parseInt(msgParts.data.substring(0, 4), 16);
@@ -480,36 +338,28 @@ const adapter = function (device) {
       console.log(`Batch location upload: ${numItems} items, type: ${locationType}`);
 
       let offset = 6;
+      const locations = [];
       for (let i = 0; i < numItems; i++) {
         const itemLen = parseInt(msgParts.data.substring(offset, offset + 4), 16) * 2;
         const itemData = msgParts.data.substring(offset + 4, offset + 4 + itemLen);
         const loc = this.parse_location_data(itemData);
         if (loc) {
-          await this.call_api('location', {
-            device_id: msgParts.device_id,
-            latitude: loc.latitude,
-            longitude: loc.longitude,
-            speed: loc.speed,
-            course: loc.direction,
-            altitude: loc.altitude,
-            timestamp: loc.timestamp.toISOString(),
-            raw_data: itemData,
-            batch_upload: true
+          locations.push({
+            ...loc,
+            raw_data: itemData
           });
         }
         offset += 4 + itemLen;
       }
 
+      msgParts.parsed_batch = locations;
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Batch location upload failed:', error);
+      console.error('Batch location parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Driver info report (0x0702)
-  // ------------------------------------------------------------------------
   this.driver_info = async function (message_serial_number, msgParts) {
     try {
       const status = parseInt(msgParts.data.substring(0, 2), 16);
@@ -537,42 +387,35 @@ const adapter = function (device) {
         driverInfo.issuing_org = Buffer.from(orgHex, 'hex').toString('utf8');
 
         const validityHex = msgParts.data.substring(60 + nameLen * 2 + orgLen * 2, 68 + nameLen * 2 + orgLen * 2);
-        driverInfo.validity = validityHex; // format YYYYMMDD
+        driverInfo.validity = validityHex;
       }
 
-      console.log('Driver info:', driverInfo);
-      // Optionally send to API
-      // await this.call_api('driver_info', driverInfo);
-
+      msgParts.parsed_driver = driverInfo;
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
-      console.error('Driver info processing failed:', error);
+      console.error('Driver info parsing failed:', error);
       this.send_response('8001', msgParts, message_serial_number, '00');
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Run other commands (called by the library when action = 'other')
-  // ------------------------------------------------------------------------
   this.run_other = function (cmd, msg_parts) {
     console.log(`Running other command: ${cmd}`);
     const serial = this.getNextOtherSerial();
 
     switch (cmd) {
-      case '0704': // Batch location
+      case '0704':
         this.batch_location(serial, msg_parts);
         break;
-      case '0702': // Driver info
+      case '0702':
         this.driver_info(serial, msg_parts);
         break;
-      case '0107': // Terminal info query
-        // Acknowledge with success (0x8001) – no data needed
+      case '0107':
         this.send_response('8001', msg_parts, serial, '00');
         break;
       case '0800':
       case '0801':
         console.log('Multimedia data received – not implemented');
-        this.send_response('8001', msg_parts, serial, '03'); // not supported
+        this.send_response('8001', msg_parts, serial, '03');
         break;
       default:
         console.log(`Unknown command: ${cmd}`);
@@ -580,16 +423,10 @@ const adapter = function (device) {
     }
   };
 
-  // ------------------------------------------------------------------------
-  // Request login to device (rarely used)
-  // ------------------------------------------------------------------------
   this.request_login_to_device = function () {
     console.log('Requesting login from device');
   };
 
-  // ------------------------------------------------------------------------
-  // Set refresh time (unused)
-  // ------------------------------------------------------------------------
   this.set_refresh_time = function (interval, duration) {
     const hours = Math.floor(duration / 3600);
     const minutes = Math.floor((duration - hours * 3600) / 60);

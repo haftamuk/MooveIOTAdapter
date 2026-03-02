@@ -6,15 +6,10 @@ const path = require("path");
 // Determine which env file to load based on NODE_ENV (default to 'development')
 const environment = process.env.NODE_ENV || 'development';
 const envFile = `.env.${environment}`;
-
 require('dotenv').config({
   path: path.resolve(__dirname, envFile)
 });
 
-console.log(`Loaded environment: ${environment} from ${envFile}`);
-
-
-// Import the whole module object
 const gps = require('./lib/server');
 
 // ============================================================================
@@ -38,7 +33,6 @@ const API_ENDPOINTS = {
 
 /**
  * Terminal lists for each server type.
- * UT04S uses crs and gpspos; GT06 only uses crs.
  * @constant {Object} terminalLists
  */
 const terminalLists = {
@@ -77,19 +71,135 @@ const terminalLists = {
       "0358657103861956",
       "0358657104813964"
     ],
-        gpspos: [
-    ]
+    gpspos: []
   }
 };
 
 /**
  * Checks if a device ID belongs to a given terminal list.
- * @param {string} deviceId - The device identifier (12‑character hex string).
+ * @param {string} deviceId - The device identifier.
  * @param {string[]} list - Array of terminal IDs to check against.
  * @returns {boolean} True if the device ID is in the list.
  */
 function isTerminalInList(deviceId, list) {
   return list.includes(deviceId);
+}
+
+/**
+ * Map to hold proxy sockets per device ID: { deviceId: { crs: Socket, gpspos: Socket } }
+ */
+const deviceProxySockets = new Map();
+
+/**
+ * Cleans up proxy sockets for a given device.
+ * @param {string} deviceId - Device identifier.
+ */
+function cleanupProxySockets(deviceId) {
+  const sockets = deviceProxySockets.get(deviceId);
+  if (sockets) {
+    if (sockets.crs) sockets.crs.destroy();
+    if (sockets.gpspos) sockets.gpspos.destroy();
+    deviceProxySockets.delete(deviceId);
+  }
+}
+
+/**
+ * Forwards raw hex data to external servers (CRS and/or GPSPOS) for a given device.
+ * @param {string} deviceId - Device identifier.
+ * @param {string} rawHex - Raw message in hex.
+ * @param {string} serverType - Either 'ut04s' or 'gt06'.
+ */
+function forwardToProxy(deviceId, rawHex, serverType) {
+  const lists = terminalLists[serverType];
+  if (!lists) return;
+
+  const isCrs = isTerminalInList(deviceId, lists.crs);
+  const isGpspos = isTerminalInList(deviceId, lists.gpspos);
+
+  if (!isCrs && !isGpspos) return;
+
+  let sockets = deviceProxySockets.get(deviceId);
+  if (!sockets) {
+    sockets = { crs: null, gpspos: null };
+    deviceProxySockets.set(deviceId, sockets);
+  }
+
+  const buffer = Buffer.from(rawHex, 'hex');
+
+  // Forward to CRS server if needed
+  if (isCrs) {
+    const crsPort = serverType === 'ut04s'
+      ? process.env.CRS_SERVER_PORT_UT04S
+      : process.env.CRS_SERVER_PORT_GTO6;
+
+    if (!sockets.crs || sockets.crs.destroyed) {
+      sockets.crs = new net.Socket();
+      sockets.crs.connect(crsPort, process.env.CRS_SERVER, () => {});
+      sockets.crs.on('error', () => {
+        if (sockets.crs) sockets.crs.destroy();
+        sockets.crs = null;
+        setTimeout(() => {
+          if (deviceProxySockets.has(deviceId)) {
+            forwardToProxy(deviceId, rawHex, serverType);
+          }
+        }, 5000);
+      });
+    }
+    if (sockets.crs && !sockets.crs.destroyed) {
+      sockets.crs.write(buffer);
+    }
+  }
+
+  // Forward to GPSPOS server if needed
+  if (isGpspos) {
+    const gpsposPort = serverType === 'ut04s'
+      ? process.env.GPSPOS_SERVER_PORT_UT04S
+      : process.env.GPSPOS_SERVER_PORT_GT06;
+
+    if (!sockets.gpspos || sockets.gpspos.destroyed) {
+      sockets.gpspos = new net.Socket();
+      sockets.gpspos.connect(gpsposPort, process.env.GPSPOS_SERVER, () => {});
+      sockets.gpspos.on('error', () => {
+        if (sockets.gpspos) sockets.gpspos.destroy();
+        sockets.gpspos = null;
+        setTimeout(() => {
+          if (deviceProxySockets.has(deviceId)) {
+            forwardToProxy(deviceId, rawHex, serverType);
+          }
+        }, 5000);
+      });
+    }
+    if (sockets.gpspos && !sockets.gpspos.destroyed) {
+      sockets.gpspos.write(buffer);
+    }
+  }
+}
+
+/**
+ * Sends data to a specified API endpoint.
+ * @param {string} endpoint - Full URL of the API endpoint.
+ * @param {Object} data - Payload to send.
+ * @returns {Promise<Object|null>} Parsed JSON response or null on failure.
+ */
+async function sendToAPI(endpoint, data) {
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "User-Agent": "GPS-Server/1.0"
+      },
+      body: JSON.stringify(data)
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return await response.json();
+  } catch (error) {
+    return null;
+  }
 }
 
 /**
@@ -104,13 +214,196 @@ const baseServerOptions = {
 };
 
 // ============================================================================
-// UT04S Server Configuration and Logic
+// Shared Event Handler
 // ============================================================================
 
 /**
- * Starts the UT04S GPS server.
- * Listens for UT04S protocol messages, processes them, and forwards raw data
- * to external CRS and GPSPOS servers for specific terminals.
+ * Sets up all event handlers for a device.
+ * @param {Device} device - The device instance.
+ * @param {net.Socket} connection - The TCP socket.
+ * @param {string} serverType - 'ut04s' or 'gt06'.
+ */
+function setupDeviceHandlers(device, connection, serverType) {
+  device.on('connected', () => {
+    // Empty handler per requirement
+  });
+
+  device.on('disconnected', () => {
+    const devId = device.getUID();
+    if (devId) cleanupProxySockets(devId);
+  });
+
+  device.on('new_device_first_time', (device_id, msg_parts) => {
+    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    // Optionally log or handle
+  });
+
+  device.on('register', (device_id, msg_parts) => {
+    device.new_device_register(msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+
+    const reg = msg_parts.parsed_register || {};
+    sendToAPI(API_ENDPOINTS.LOGIN, {
+      device_id,
+      imei: device_id,
+      protocol_version: 'JT808',
+      ip_address: connection.remoteAddress,
+      timestamp: new Date().toISOString(),
+      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
+      terminal_info: reg,
+      raw_preview: msg_parts.raw_hex ? msg_parts.raw_hex.substring(0, 50) : '',
+    }).catch(() => {});
+  });
+
+  device.on('login_request', (device_id, msg_parts) => {
+    device.login_authorized(true, msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+
+    const auth = msg_parts.parsed_auth || {};
+    sendToAPI(API_ENDPOINTS.LOGIN, {
+      device_id,
+      imei: device_id,
+      protocol_version: serverType === 'ut04s' ? 'JT808' : 'GT06+',
+      ip_address: connection.remoteAddress,
+      timestamp: new Date().toISOString(),
+      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
+      auth_code: auth.authCode || '',
+      raw_preview: msg_parts.raw_hex ? msg_parts.raw_hex.substring(0, 50) : '',
+    }).catch(() => {});
+  });
+
+  device.on('heartbeat', (device_id, msg_parts) => {
+    if (serverType === 'ut04s') {
+      device.receive_hbt(msg_parts);
+    }
+    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    sendToAPI(API_ENDPOINTS.HEARTBEAT, {
+      device_id,
+      online: true,
+      timestamp: new Date().toISOString(),
+      type: 'heartbeat',
+      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs)
+    }).catch(() => {});
+  });
+
+  device.on('logout', (device_id, msg_parts) => {
+    device.logout(msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    // No API call for logout
+  });
+
+  device.on('ping', (data, msg_parts) => {
+    if (serverType === 'ut04s') {
+      device.received_location_report(msg_parts);
+    }
+    forwardToProxy(data.device_id, msg_parts.raw_hex, serverType);
+
+    const payload = {
+      device_id: data.device_id,
+      latitude: data.latitude,
+      longitude: data.longitude,
+      speed: data.speed || 0,
+      course: data.orientation || data.direction || 0,
+      altitude: data.height || data.altitude || 0,
+      satellites: data.satellites || 0,
+      device_status: data.device_status || {
+        alarm_flag: data.alarm_mask,
+        status_flags: data.status,
+        battery: data.battery,
+        gsm_signal: data.gsm_signal
+      },
+      timestamp: data.date instanceof Date ? data.date.toISOString() : new Date().toISOString(),
+      raw_data: msg_parts.raw_hex,
+      type: 'location',
+      protocol: serverType === 'ut04s' ? 'JT808' : msg_parts.protocol_id || 'GT06',
+      crs_proxy: isTerminalInList(data.device_id, terminalLists[serverType].crs)
+    };
+    sendToAPI(API_ENDPOINTS.LOCATION, payload).catch(() => {});
+  });
+
+  device.on('alarm', (alarmData, msg_parts) => {
+    if (serverType === 'ut04s') {
+      device.received_alarm_report(msg_parts);
+    }
+    forwardToProxy(alarmData.device_id, msg_parts.raw_hex, serverType);
+
+    const alarmPayload = {
+      device_id: alarmData.device_id,
+      alarm_type: alarmData.alarm_type,
+      alarm_code: alarmData.alarm_code,
+      latitude: alarmData.latitude,
+      longitude: alarmData.longitude,
+      speed: alarmData.speed || 0,
+      device_status: alarmData.device_status || {},
+      raw_data: alarmData.raw_data || msg_parts.raw_hex,
+      timestamp: alarmData.date instanceof Date ? alarmData.date.toISOString() : new Date().toISOString(),
+      type: 'alarm',
+      protocol: serverType === 'ut04s' ? 'JT808' : msg_parts.protocol_id || 'GT06',
+      crs_proxy: isTerminalInList(alarmData.device_id, terminalLists[serverType].crs)
+    };
+    sendToAPI(API_ENDPOINTS.ALARM, alarmPayload).catch(() => {});
+
+    // Also send location for alarm events
+    const locPayload = {
+      device_id: alarmData.device_id,
+      latitude: alarmData.latitude,
+      longitude: alarmData.longitude,
+      speed: alarmData.speed || 0,
+      course: alarmData.orientation || 0,
+      altitude: alarmData.height || 0,
+      satellites: alarmData.satellites || 0,
+      device_status: alarmData.device_status || {},
+      timestamp: alarmData.date instanceof Date ? alarmData.date.toISOString() : new Date().toISOString(),
+      raw_data: alarmData.raw_data || msg_parts.raw_hex,
+      type: 'location',
+      protocol: serverType === 'ut04s' ? 'JT808' : msg_parts.protocol_id || 'GT06',
+      crs_proxy: isTerminalInList(alarmData.device_id, terminalLists[serverType].crs)
+    };
+    sendToAPI(API_ENDPOINTS.LOCATION, locPayload).catch(() => {});
+  });
+
+  device.on('other', (device_id, msg_parts) => {
+    // Let adapter handle protocol-specific logic (responses, etc.)
+    device.adapter.run_other(msg_parts.cmd, msg_parts);
+    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+
+    // Handle JT808 batch location (0x0704)
+    if (serverType === 'ut04s' && msg_parts.cmd === '0704' && msg_parts.parsed_batch) {
+      for (const loc of msg_parts.parsed_batch) {
+        sendToAPI(API_ENDPOINTS.LOCATION, {
+          device_id,
+          latitude: loc.latitude,
+          longitude: loc.longitude,
+          speed: loc.speed,
+          course: loc.direction,
+          altitude: loc.altitude,
+          satellites: loc.additional_info.satellites || 0,
+          timestamp: loc.timestamp.toISOString(),
+          raw_data: loc.raw_data || '',
+          type: 'location',
+          protocol: 'JT808',
+          batch_upload: true,
+          crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs)
+        }).catch(() => {});
+      }
+    }
+    // Handle JT808 driver info (0x0702)
+    else if (serverType === 'ut04s' && msg_parts.cmd === '0702' && msg_parts.parsed_driver) {
+      console.log('Driver info received:', msg_parts.parsed_driver);
+    }
+    // For GT06, other commands (like lbs_location, status) are just forwarded and logged
+    else {
+      console.log(`Unhandled other command for ${serverType}:`, msg_parts.cmd, msg_parts.original_action);
+    }
+  });
+}
+
+// ============================================================================
+// UT04S Server
+// ============================================================================
+
+/**
+ * Starts the UT04S GPS server (JT808 protocol).
  * @returns {Object} The created server instance.
  */
 function startUT04SServer() {
@@ -120,276 +413,26 @@ function startUT04SServer() {
     device_adapter: 'JT808',
   };
 
-  // Map to hold proxy sockets per device ID: { deviceId: { crs: Socket, gpspos: Socket } }
-  const deviceProxySockets = new Map();
-
-  /**
-   * Forwards raw hex data to external servers (CRS and/or GPSPOS) for a given device.
-   * @param {string} deviceId - 12‑character device ID (hex string).
-   * @param {string} rawHex - Raw message in hex (from msg_parts.raw_hex).
-   */
-  function forwardToProxy(deviceId, rawHex) {
-    const isCrs = isTerminalInList(deviceId, terminalLists.ut04s.crs);
-    const isGpspos = isTerminalInList(deviceId, terminalLists.ut04s.gpspos);
-
-    if (!isCrs && !isGpspos) return;
-
-    // Get or create socket objects for this device
-    let sockets = deviceProxySockets.get(deviceId);
-    if (!sockets) {
-      sockets = { crs: null, gpspos: null };
-      deviceProxySockets.set(deviceId, sockets);
-    }
-
-    const buffer = Buffer.from(rawHex, 'hex');
-
-    // Forward to CRS server if needed
-    if (isCrs) {
-      if (!sockets.crs || sockets.crs.destroyed) {
-        sockets.crs = new net.Socket();
-        sockets.crs.connect(process.env.CRS_SERVER_PORT_UT04S, process.env.CRS_SERVER, () => {});
-        sockets.crs.on('error', () => {
-          if (sockets.crs) sockets.crs.destroy();
-          sockets.crs = null;
-          setTimeout(() => {
-            if (deviceProxySockets.has(deviceId)) {
-              forwardToProxy(deviceId, rawHex);
-            }
-          }, 5000);
-        });
-      }
-      if (sockets.crs && !sockets.crs.destroyed) {
-        sockets.crs.write(buffer);
-      }
-    }
-
-    // Forward to GPSPOS server if needed
-    if (isGpspos) {
-      if (!sockets.gpspos || sockets.gpspos.destroyed) {
-        sockets.gpspos = new net.Socket();
-        sockets.gpspos.connect(process.env.GPSPOS_SERVER_PORT_UT04S, process.env.GPSPOS_SERVER, () => {});
-        sockets.gpspos.on('error', () => {
-          if (sockets.gpspos) sockets.gpspos.destroy();
-          sockets.gpspos = null;
-          setTimeout(() => {
-            if (deviceProxySockets.has(deviceId)) {
-              forwardToProxy(deviceId, rawHex);
-            }
-          }, 5000);
-        });
-      }
-      if (sockets.gpspos && !sockets.gpspos.destroyed) {
-        sockets.gpspos.write(buffer);
-      }
-    }
-  }
-
-  // Create and start the UT04S server
   const ut04sServer = gps.server(ut04sOptions, (device, connection) => {
-    // Device connected
-    device.on('connected', () => {});
+    setupDeviceHandlers(device, connection, 'ut04s');
 
-    // Device disconnected – clean up proxy sockets
-    device.on('disconnected', () => {
-      const devId = device.getUID();
-      const sockets = deviceProxySockets.get(devId);
-      if (sockets) {
-        if (sockets.crs) sockets.crs.destroy();
-        if (sockets.gpspos) sockets.gpspos.destroy();
-        deviceProxySockets.delete(devId);
-      }
-    });
-
-    // Terminal registration (0x0100)
-    device.on('register', (device_id, msg_parts) => {
-      device.new_device_register(msg_parts);
-      forwardToProxy(device_id, msg_parts.raw_hex);
-    });
-
-    // Terminal authentication / login (0x0102)
-    device.on('login_request', (device_id, msg_parts) => {
-      device.login_authorized(true, msg_parts);
-      forwardToProxy(device_id, msg_parts.raw_hex);
-    });
-
-    // Heartbeat (0x0002)
-    device.on('hbt', (device_id, msg_parts) => {
-      device.receive_hbt(msg_parts);
-      forwardToProxy(device_id, msg_parts.raw_hex);
-    });
-
-    // Terminal logout (0x0003)
-    device.on('logout', (device_id, msg_parts) => {
-      device.logout(msg_parts);
-      forwardToProxy(device_id, msg_parts.raw_hex);
-    });
-
-    // Location report (0x0200 without alarm)
-    device.on('ping', (data, msg_parts) => {
-      device.received_location_report(msg_parts);
-      forwardToProxy(data.device_id, msg_parts.raw_hex);
-    });
-
-    // Alarm report (0x0200 with alarm flag)
-    device.on('alarm', (alarmData, msg_parts) => {
-      device.received_alarm_report(msg_parts);
-      forwardToProxy(alarmData.device_id, msg_parts.raw_hex);
-    });
-
-    // Other commands (0x0107, 0x0704, 0x0702, etc.)
-    device.on('other', (device_id, msg_parts) => {
-      device.adapter.run_other(msg_parts.cmd, msg_parts);
-      forwardToProxy(device_id, msg_parts.raw_hex);
-    });
-
-    // Optional: log raw data that is not forwarded (removed)
-    connection.on('data', (data) => {});
-
-    // Connection error handling
-    connection.on('error', (err) => {});
-
-    // Connection close (already handled by device.disconnected)
+    // Additional empty handlers per requirement
+    connection.on('error', () => {});
     connection.on('close', () => {});
+    connection.on('timeout', () => {}); // added missing timeout handler
   });
 
-  ut04sServer.on('error', (err) => {});
+  ut04sServer.on('error', () => {}); // empty handler
 
   return ut04sServer;
 }
 
 // ============================================================================
-// GT06 Server Configuration and Logic
+// GT06 Server
 // ============================================================================
 
 /**
- * Queue for limiting concurrent API requests.
- */
-class RequestQueue {
-  /**
-   * Creates a request queue.
-   * @param {number} maxConcurrent - Maximum number of concurrent requests.
-   */
-  constructor(maxConcurrent = 5) {
-    this.queue = [];
-    this.active = 0;
-    this.maxConcurrent = maxConcurrent;
-    this.totalProcessed = 0;
-    this.totalErrors = 0;
-  }
-
-  /**
-   * Adds a request function to the queue.
-   * @param {Function} requestFn - Async function that performs the request.
-   * @param {string} description - Description for logging (now unused).
-   * @returns {Promise<any>} Resolves with the request result.
-   */
-  async add(requestFn, description = 'request') {
-    return new Promise((resolve, reject) => {
-      this.queue.push({ requestFn, resolve, reject, description });
-      this.process();
-    });
-  }
-
-  async process() {
-    if (this.active >= this.maxConcurrent || this.queue.length === 0) {
-      return;
-    }
-
-    this.active++;
-    const { requestFn, resolve, reject } = this.queue.shift();
-
-    try {
-      const result = await requestFn();
-      this.totalProcessed++;
-      resolve(result);
-    } catch (error) {
-      this.totalErrors++;
-      reject(error);
-    } finally {
-      this.active--;
-      this.process();
-    }
-  }
-
-  /**
-   * Returns current queue statistics.
-   * @returns {Object} Stats object.
-   */
-  getStats() {
-    return {
-      active: this.active,
-      queued: this.queue.length,
-      totalProcessed: this.totalProcessed,
-      totalErrors: this.totalErrors
-    };
-  }
-}
-
-const requestQueue = new RequestQueue(3);
-
-/**
- * Creates a TCP client connection to the CRS proxy server.
- * @returns {net.Socket|null} The connected socket, or null on failure.
- */
-function createCrsConnection() {
-  if (!process.env.CRS_SERVER || !process.env.CRS_SERVER_PORT_GTO6) {
-    return null;
-  }
-
-  try {
-    const client = new net.Socket();
-
-    client.setTimeout(30000);
-    client.setKeepAlive(true, 10000);
-
-    client.on('connect', () => {});
-    client.on('error', () => {});
-    client.on('timeout', () => { client.destroy(); });
-    client.on('close', () => {});
-    client.on('end', () => {});
-
-    client.connect(process.env.CRS_SERVER_PORT_GTO6, process.env.CRS_SERVER, () => {});
-
-    return client;
-  } catch (error) {
-    return null;
-  }
-}
-
-/**
- * Sends data to a specified API endpoint via the request queue.
- * @param {string} endpoint - Full URL of the API endpoint.
- * @param {Object} data - Payload to send.
- * @param {string} description - Description for the queue (unused in logging now).
- * @returns {Promise<Object|null>} Parsed JSON response or null on failure.
- */
-async function sendToAPI(endpoint, data, description = 'API request') {
-  return requestQueue.add(async () => {
-    try {
-      const response = await fetch(endpoint, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "User-Agent": "GPS-Server/1.0"
-        },
-        body: JSON.stringify(data)
-      });
-
-      if (!response.ok) {
-        return null;
-      }
-
-      return await response.json();
-    } catch (error) {
-      return null;
-    }
-  }, description);
-}
-
-/**
  * Starts the GT06 GPS server.
- * Listens for GT06 protocol messages, processes them, and forwards data
- * to the Moove API and optionally to the CRS proxy.
  * @returns {Object} The created server instance.
  */
 function startGT06Server() {
@@ -399,153 +442,15 @@ function startGT06Server() {
     device_adapter: "GT06",
   };
 
-  const crsTerminals = terminalLists.gt06.crs;
-
-  // Create and start the GT06 server
-  const gt06Server = gps.server(gt06Options, function (device, connection) {
-    let crsClient = null;
-    let is_proxy_CRS_device = false;
-    let deviceId = null;
-    let connectionStartTime = Date.now();
-    let packetsReceived = 0;
+  const gt06Server = gps.server(gt06Options, (device, connection) => {
+    setupDeviceHandlers(device, connection, 'gt06');
 
     connection.on('error', () => {});
-    connection.on('close', () => {
-      if (crsClient) {
-        try { crsClient.destroy(); } catch (e) { /* ignore */ }
-      }
-    });
+    connection.on('close', () => {});
     connection.on('timeout', () => {});
-
-    device.on("login_request", function (device_id, msg_parts) {
-      packetsReceived++;
-      deviceId = device_id;
-
-      let analysis = {};
-      if (msg_parts.analysis && Object.keys(msg_parts.analysis).length > 0) {
-        analysis = msg_parts.analysis;
-      } else {
-        analysis = {
-          protocolNumber: msg_parts.protocol_id || 'unknown',
-          packetType: 'Login',
-          brands: ['GT06 Family'],
-          protocols: ['GT06']
-        };
-      }
-
-      this.login_authorized(true);
-      is_proxy_CRS_device = isTerminalInList(device_id, crsTerminals);
-
-      if (is_proxy_CRS_device && !crsClient) {
-        crsClient = createCrsConnection();
-      }
-
-      sendToAPI(API_ENDPOINTS.LOGIN, {
-        device_id: device_id,
-        imei: device_id,
-        protocol_version: "GT06+",
-        ip_address: connection.remoteAddress,
-        timestamp: new Date().toISOString(),
-        crs_proxy: is_proxy_CRS_device,
-        brand_info: analysis.brands || [],
-        protocol_info: analysis.protocols || [],
-        packet_type: analysis.packetType,
-        protocol_number: analysis.protocolNumber,
-        raw_preview: msg_parts.raw ? msg_parts.raw.substring(0, 50) : '',
-        analysis: analysis
-      }, `Login for ${device_id}`).catch(() => {});
-    });
-
-    device.on("ping", function (data, msg_parts) {
-      packetsReceived++;
-      if (!data.device_id) {
-        return;
-      }
-
-      deviceId = data.device_id;
-      is_proxy_CRS_device = isTerminalInList(data.device_id, crsTerminals);
-
-      sendToAPI(API_ENDPOINTS.LOCATION, {
-        device_id: data.device_id,
-        latitude: data.latitude,
-        longitude: data.longitude,
-        speed: data.speed || 0,
-        course: data.orientation || 0,
-        satellites: data.satellites || 0,
-        raw_data: data.raw_data || '',
-        timestamp: data.date || new Date().toISOString(),
-        type: 'location',
-        protocol: msg_parts.protocol_id,
-        crs_proxy: is_proxy_CRS_device
-      }, `Location for ${data.device_id}`).catch(() => {});
-    });
-
-    device.on("alarm", function (alarm_code, alarm_data, msg_parts) {
-      packetsReceived++;
-      if (!alarm_data.device_id) {
-        return;
-      }
-
-      deviceId = alarm_data.device_id;
-      is_proxy_CRS_device = isTerminalInList(alarm_data.device_id, crsTerminals);
-
-      sendToAPI(API_ENDPOINTS.ALARM, {
-        device_id: alarm_data.device_id,
-        alarm_type: alarm_data.alarm_type,
-        alarm_code: alarm_data.alarm_code || alarm_code,
-        latitude: alarm_data.latitude,
-        longitude: alarm_data.longitude,
-        speed: alarm_data.speed || 0,
-        parsed_details: alarm_data.parsed_details || {},
-        raw_data: alarm_data.raw_data || '',
-        timestamp: alarm_data.date || new Date().toISOString(),
-        type: 'alarm',
-        protocol: msg_parts.protocol_id,
-        crs_proxy: is_proxy_CRS_device
-      }, `Alarm for ${alarm_data.device_id}`).catch(() => {});
-    });
-
-    device.on("heartbeat", function (data, msg_parts) {
-      packetsReceived++;
-      const devId = data.device_id || device.getUID();
-      if (!devId) return;
-
-      is_proxy_CRS_device = isTerminalInList(devId, crsTerminals);
-
-      sendToAPI(API_ENDPOINTS.HEARTBEAT, {
-        device_id: devId,
-        online: true,
-        timestamp: new Date().toISOString(),
-        type: 'heartbeat',
-        crs_proxy: is_proxy_CRS_device
-      }, `Heartbeat for ${devId}`).catch(() => {});
-    });
-
-    device.on("connected", function () {});
-    device.on("disconnected", function () {
-      if (crsClient) {
-        try { crsClient.destroy(); } catch (e) { /* ignore */ }
-      }
-    });
-
-    // Handle incoming data for CRS proxying
-    connection.on("data", function (data) {
-      if (is_proxy_CRS_device && crsClient) {
-        try {
-          if (crsClient.writable) {
-            crsClient.write(data);
-          } else {
-            crsClient.destroy();
-            crsClient = createCrsConnection();
-          }
-        } catch (error) {
-          // ignore
-        }
-      }
-    });
   });
 
-  gt06Server.on("error", function (err) {});
+  gt06Server.on('error', () => {});
 
   return gt06Server;
 }
@@ -565,21 +470,17 @@ const gt06Server = startGT06Server();
  * @param {string} signal - The signal that triggered the shutdown.
  */
 function gracefulShutdown(signal) {
-  // Close UT04S server
-  if (ut04sServer && typeof ut04sServer.close === 'function') {
-    ut04sServer.close(() => {});
-  } else if (ut04sServer && ut04sServer.server && typeof ut04sServer.server.close === 'function') {
-    ut04sServer.server.close(() => {});
-  }
+  const closeServer = (server) => {
+    if (server && typeof server.close === 'function') {
+      server.close(() => {});
+    } else if (server && server.server && typeof server.server.close === 'function') {
+      server.server.close(() => {});
+    }
+  };
 
-  // Close GT06 server
-  if (gt06Server && typeof gt06Server.close === 'function') {
-    gt06Server.close(() => {});
-  } else if (gt06Server && gt06Server.server && typeof gt06Server.server.close === 'function') {
-    gt06Server.server.close(() => {});
-  }
+  closeServer(ut04sServer);
+  closeServer(gt06Server);
 
-  // Allow time for cleanup then exit
   setTimeout(() => {
     process.exit(0);
   }, 3000);
@@ -588,6 +489,6 @@ function gracefulShutdown(signal) {
 process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-// Global error handlers
+// Global error handlers (empty per requirement)
 process.on('uncaughtException', (err) => {});
 process.on('unhandledRejection', (reason, promise) => {});

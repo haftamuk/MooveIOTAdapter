@@ -1,4 +1,72 @@
-Protocol/Model : UT04
+# Start the Application with PM2
+Development
+``` bash
+pm2 start ecosystem.config.js --env development
+```
+Staging
+``` bash
+pm2 start ecosystem.config.js --env staging
+``` 
+Production
+``` bash
+pm2 start ecosystem.config.js --env production
+``` 
+
+PM2 will now run your application in the background. The process name is MooveIotAdapter (as defined in the config).
+
+# Useful PM2 Commands
+Command	Description
+``` shell
+pm2 list	## List all running processes
+pm2 logs MooveIotAdapter	## Show live logs for the process
+pm2 logs MooveIotAdapter --lines 100	## Show last 100 log lines
+pm2 monit	## Launch a real‑time monitoring dashboard
+pm2 restart MooveIotAdapter	## Restart the process
+pm2 stop  MooveIotAdapter	## Stop the process
+pm2 delete MooveIotAdapter	## Remove the process from PM2’s list
+pm2 reload all	## Reload all processes (zero‑downtime if in cluster mode, but here it will restart)
+```
+# Set Up PM2 to Auto‑Start on System Boot
+After confirming that the application runs correctly, configure PM2 to launch at server startup.
+
+## Generate and save the startup script:
+
+``` bash
+pm2 startup
+```
+This will output a command that you need to run with sudo (e.g., sudo env PATH=$PATH:/usr/bin pm2 startup systemd -u youruser --hp /home/youruser). Follow the instructions.
+
+Save the current process list so PM2 knows what to restart:
+
+``` bash
+pm2 save
+```
+Now, if the server reboots, PM2 will automatically start your GPS server.
+
+# Additional Considerations
+Log Rotation: PM2 has a built‑in log rotation module. Install and configure it to avoid huge log files:
+
+``` bash
+pm2 install pm2-logrotate
+pm2 set pm2-logrotate:max_size 10M
+pm2 set pm2-logrotate:retain 7
+```
+Environment Variables: If you have sensitive variables, you can also store them in a separate file (e.g., .env) and use dotenv to load them. Your current setup already uses dotenv with environment‑specific files, so PM2’s NODE_ENV switch will pick the correct one.
+
+Monitoring: Use pm2 monit for a quick dashboard. For more advanced metrics, consider integrating with tools like Keymetrics or Prometheus.
+
+Multiple Servers: If you need to run separate instances for UT04S and GT06, you could define two apps in the ecosystem file, each with its own script (but your current index.js already starts both). The current approach is fine.
+
+# Verification
+After starting, verify that your servers are listening on the expected ports:
+
+``` bash
+netstat -tulpn | grep node
+```
+
+
+
+# Protocol/Model : UT04
 
 Running the app: node index.js
 
