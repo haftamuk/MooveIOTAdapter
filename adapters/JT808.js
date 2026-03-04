@@ -140,28 +140,64 @@ const adapter = function (device) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-  this.register = async function (message_serial_number, msgParts) {
+this.register = async function (responseSerial, msgParts) {
     logger.debug(`register called for device: ${this.device.getUID()}`);
     try {
-      const provinceId = parseInt(msgParts.data.substring(0, 4), 16);
-      const cityId = parseInt(msgParts.data.substring(4, 8), 16);
-      const manufacturerId = msgParts.data.substring(8, 18);
-      const terminalType = msgParts.data.substring(18, 58);
-      const terminalId = msgParts.data.substring(58, 72);
-      const plateColor = parseInt(msgParts.data.substring(72, 74), 16);
-      const vinOrPlate = Buffer.from(msgParts.data.substring(74), 'hex').toString();
+        // Parse registration data (optional, kept for logging)
+        const provinceId = parseInt(msgParts.data.substring(0, 4), 16);
+        const cityId = parseInt(msgParts.data.substring(4, 8), 16);
+        const manufacturerId = msgParts.data.substring(8, 18);
+        const terminalType = msgParts.data.substring(18, 58);
+        const terminalId = msgParts.data.substring(58, 72);
+        const plateColor = parseInt(msgParts.data.substring(72, 74), 16);
+        const vinOrPlate = Buffer.from(msgParts.data.substring(74), 'hex').toString();
 
-      msgParts.parsed_register = {
-        provinceId, cityId, manufacturerId, terminalType, terminalId, plateColor, vinOrPlate
-      };
-      logger.debug(`register parsed: provinceId=${provinceId}, cityId=${cityId}, terminalId=${terminalId}`);
+        msgParts.parsed_register = {
+            provinceId, cityId, manufacturerId, terminalType, terminalId, plateColor, vinOrPlate
+        };
+        logger.debug(`register parsed: provinceId=${provinceId}, cityId=${cityId}, terminalId=${terminalId}`);
 
-      this.send_response('8100', msgParts, message_serial_number, '00');
+        // Success – result = 0x00
+        const result = 0x00;
+        // Authentication code (4 bytes, e.g., "1234" in ASCII)
+        const authCode = Buffer.from("1234", 'ascii');
+        const authCodeHex = authCode.toString('hex').toUpperCase();
+
+        // Request serial from the original registration message
+        const requestSerial = msgParts.cmd_serial_no; // e.g., "0001"
+
+        // Body length = reply serial (2) + result (1) + auth code length
+        const bodyLength = (2 + 1 + authCode.length).toString(16).padStart(4, '0').toUpperCase();
+
+        // Body: reply serial + result + auth code
+        const body = requestSerial + result.toString(16).padStart(2, '0').toUpperCase() + authCodeHex;
+
+        // Header: message ID (8100) + bodyLength + terminal ID + response serial
+        const header = '8100' + bodyLength + msgParts.device_id + responseSerial;
+
+        // Full core (without start/stop and checksum)
+        const core = header + body;
+
+        const checksum = this.calcChecksum(core);
+        const response = msgParts.start + core + checksum + msgParts.finish;
+        logger.debug('========================================');
+        logger.debug(`Register response: ${response.toUpperCase()}`);
+        logger.debug('========================================');
+        this.device.send(Buffer.from(response, 'hex'));
+
     } catch (error) {
-      logger.error('Registration parsing failed:', error);
-      this.send_response('8100', msgParts, message_serial_number, '01');
+        logger.error('Registration parsing failed:', error);
+        // Failure response – result != 0, no auth code
+        const result = 0x01; // or any appropriate error code
+        const bodyLength = '0003'; // reply serial (2) + result (1)
+        const body = msgParts.cmd_serial_no + result.toString(16).padStart(2, '0').toUpperCase();
+        const header = '8100' + bodyLength + msgParts.device_id + responseSerial;
+        const core = header + body;
+        const checksum = this.calcChecksum(core);
+        const response = msgParts.start + core + checksum + msgParts.finish;
+        this.device.send(Buffer.from(response, 'hex'));
     }
-  };
+};
 
   this.authorize = async function (message_serial_number, msgParts) {
     logger.debug(`authorize called for device: ${this.device.getUID()}`);
@@ -181,11 +217,32 @@ const adapter = function (device) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-  this.parse_location_data = function (dataStr) {
+this.parse_location_data = function (dataStr) {
     logger.debug(`parse_location_data: ${dataStr}`);
     if (!dataStr || dataStr.length < 56) {
-      logger.error('Location data too short:', dataStr);
-      return null;
+        logger.error('Location data too short:', dataStr);
+        return null;
+    }
+
+    // Helper: convert 6‑byte BCD (YYMMDDhhmmss) to Date
+    function parseBCDTimestamp(hex) {
+        try {
+            const year = parseInt(hex.substring(0, 2), 16) + 2000;
+            const month = parseInt(hex.substring(2, 4), 16) - 1; // JS months 0‑11
+            const day = parseInt(hex.substring(4, 6), 16);
+            const hour = parseInt(hex.substring(6, 8), 16);
+            const minute = parseInt(hex.substring(8, 10), 16);
+            const second = parseInt(hex.substring(10, 12), 16);
+            const date = new Date(year, month, day, hour, minute, second);
+            // Validate the date
+            if (isNaN(date.getTime())) {
+                throw new Error('Invalid date components');
+            }
+            return date;
+        } catch (e) {
+            logger.error('Failed to parse BCD timestamp:', hex, e);
+            return new Date(); // fallback to current time
+        }
     }
 
     const alarmFlag = parseInt(dataStr.substring(0, 8), 16);
@@ -200,39 +257,39 @@ const adapter = function (device) {
     const additionalInfo = {};
     let remaining = dataStr.substring(56);
     while (remaining.length >= 4) {
-      const infoId = remaining.substring(0, 2);
-      const infoLen = parseInt(remaining.substring(2, 4), 16) * 2;
-      if (remaining.length < 4 + infoLen) break;
-      const infoVal = remaining.substring(4, 4 + infoLen);
+        const infoId = remaining.substring(0, 2);
+        const infoLen = parseInt(remaining.substring(2, 4), 16) * 2; // length in hex chars
+        if (remaining.length < 4 + infoLen) break;
+        const infoVal = remaining.substring(4, 4 + infoLen);
 
-      switch (infoId) {
-        case '01': additionalInfo.mileage = parseInt(infoVal, 16) / 10; break;
-        case '02': additionalInfo.fuel = parseInt(infoVal, 16) / 10; break;
-        case '03': additionalInfo.driving_speed = parseInt(infoVal, 16) / 10; break;
-        case '25': additionalInfo.vehicle_signals = parseInt(infoVal, 16); break;
-        case '30': additionalInfo.gsm_signal = parseInt(infoVal, 16); break;
-        case '31': additionalInfo.satellites = parseInt(infoVal, 16); break;
-        case '38': additionalInfo.battery_percentage = parseInt(infoVal, 16); break;
-        case '2a': additionalInfo.io_status = parseInt(infoVal, 16); break;
-        case '2b': additionalInfo.analog_data = parseInt(infoVal, 16); break;
-        default: additionalInfo[infoId] = infoVal;
-      }
-      remaining = remaining.substring(4 + infoLen);
+        switch (infoId) {
+            case '01': additionalInfo.mileage = parseInt(infoVal, 16) / 10; break;
+            case '02': additionalInfo.fuel = parseInt(infoVal, 16) / 10; break;
+            case '03': additionalInfo.driving_speed = parseInt(infoVal, 16) / 10; break;
+            case '25': additionalInfo.vehicle_signals = parseInt(infoVal, 16); break;
+            case '30': additionalInfo.gsm_signal = parseInt(infoVal, 16); break;
+            case '31': additionalInfo.satellites = parseInt(infoVal, 16); break;
+            case '38': additionalInfo.battery_percentage = parseInt(infoVal, 16); break;
+            case '2a': additionalInfo.io_status = parseInt(infoVal, 16); break;
+            case '2b': additionalInfo.analog_data = parseInt(infoVal, 16); break;
+            default: additionalInfo[infoId] = infoVal;
+        }
+        remaining = remaining.substring(4 + infoLen);
     }
 
     logger.debug(`parse_location_data: lat=${latitude}, lng=${longitude}, speed=${speed}`);
     return {
-      alarm_flag: alarmFlag,
-      status: status,
-      latitude: latitude,
-      longitude: longitude,
-      altitude: altitude,
-      speed: speed,
-      direction: direction,
-      timestamp: timestamp,
-      additional_info: additionalInfo
+        alarm_flag: alarmFlag,
+        status: status,
+        latitude: latitude,
+        longitude: longitude,
+        altitude: altitude,
+        speed: speed,
+        direction: direction,
+        timestamp: timestamp,               // now a Date object
+        additional_info: additionalInfo
     };
-  };
+};
 
   this.location_report = async function (message_serial_number, msgParts) {
     logger.debug(`location_report called for device: ${this.device.getUID()}`);
