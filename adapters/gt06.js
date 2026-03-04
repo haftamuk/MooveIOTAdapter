@@ -62,6 +62,9 @@ var adapter = function (device) {
         parts['device_id'] = '';
       }
 
+      // Ensure raw_hex is present for consistent handling in index.js
+      parts.raw_hex = hexData;
+
       logger.debug(`Parsed: Protocol=${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
       return parts;
     } catch (error) {
