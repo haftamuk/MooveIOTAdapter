@@ -1,7 +1,7 @@
 // Combined GPS Server for UT04S and GT06
-const net = require("net");
-const fs = require("fs");
-const path = require("path");
+const net = require('net');
+const fs = require('fs');
+const path = require('path');
 
 const environment = process.env.NODE_ENV || 'development';
 const envFile = `.env.${environment}`;
@@ -21,18 +21,46 @@ const API_ENDPOINTS = {
   ALARM: `${MOOVE_SERVER_BASE_URL}/api/gps/alarm`,
   STATUS: `${MOOVE_SERVER_BASE_URL}/api/gps/status`,
   HEARTBEAT: `${MOOVE_SERVER_BASE_URL}/api/gps/heartbeat`,
-  LOGIN: `${MOOVE_SERVER_BASE_URL}/api/gps/login`
+  LOGIN: `${MOOVE_SERVER_BASE_URL}/api/gps/login`,
 };
 
 const terminalLists = {
   ut04s: {
     crs: ['020201232938', '020201228393'],
-    gpspos: ['020201232938', '020201228393', '020201292186', '020201228351', '020201205789', '020201223132', '020201294976', '020201206555', '020201291753', '020201263620']
+    gpspos: [
+      '020201232938',
+      '020201228393',
+      '020201292186',
+      '020201228351',
+      '020201205789',
+      '020201223132',
+      '020201294976',
+      '020201206555',
+      '020201291753',
+      '020201263620',
+    ],
   },
   gt06: {
-    crs: ["0868720063451946", "0868720063452100", "0868720062933829", "0864943047255027", "0358657103600172", "0358657103608399", "0358657103600453", "0358657105060953", "0358657104462051", "0868720061903625", "0868720061906289", "0868720061905174", "0868720061898619", "0358657104517136", "0358657103861956", "0358657104813964"],
-    gpspos: ["0868720063451946", "0358657104813964"]
-  }
+    crs: [
+      '0868720063451946',
+      '0868720063452100',
+      '0868720062933829',
+      '0864943047255027',
+      '0358657103600172',
+      '0358657103608399',
+      '0358657103600453',
+      '0358657105060953',
+      '0358657104462051',
+      '0868720061903625',
+      '0868720061906289',
+      '0868720061905174',
+      '0868720061898619',
+      '0358657104517136',
+      '0358657103861956',
+      '0358657104813964',
+    ],
+    gpspos: ['0868720063451946', '0358657104813964'],
+  },
 };
 
 function isTerminalInList(deviceId, list) {
@@ -68,18 +96,24 @@ function forwardToProxy(deviceId, rawHex, serverType) {
   const buffer = Buffer.from(rawHex, 'hex');
 
   if (isCrs) {
-    const crsPort = serverType === 'ut04s' ? process.env.CRS_SERVER_PORT_UT04S : process.env.CRS_SERVER_PORT_GTO6;
+    const crsPort =
+      serverType === 'ut04s'
+        ? process.env.CRS_SERVER_PORT_UT04S
+        : process.env.CRS_SERVER_PORT_GTO6;
     if (!sockets.crs || sockets.crs.destroyed) {
       sockets.crs = new net.Socket();
       sockets.crs.connect(crsPort, process.env.CRS_SERVER, () => {
         logger.debug(`CRS proxy connected for device ${deviceId}`);
       });
       sockets.crs.on('error', (err) => {
-        logger.error(`CRS proxy error for device ${deviceId}: ${err.message}`, { error: err });
+        logger.error(`CRS proxy error for device ${deviceId}: ${err.message}`, {
+          error: err,
+        });
         if (sockets.crs) sockets.crs.destroy();
         sockets.crs = null;
         setTimeout(() => {
-          if (deviceProxySockets.has(deviceId)) forwardToProxy(deviceId, rawHex, serverType);
+          if (deviceProxySockets.has(deviceId))
+            forwardToProxy(deviceId, rawHex, serverType);
         }, 5000);
       });
     }
@@ -87,34 +121,48 @@ function forwardToProxy(deviceId, rawHex, serverType) {
   }
 
   if (isGpspos) {
-    const gpsposPort = serverType === 'ut04s' ? process.env.GPSPOS_SERVER_PORT_UT04S : process.env.GPSPOS_SERVER_PORT_GT06;
+    const gpsposPort =
+      serverType === 'ut04s'
+        ? process.env.GPSPOS_SERVER_PORT_UT04S
+        : process.env.GPSPOS_SERVER_PORT_GT06;
     if (!sockets.gpspos || sockets.gpspos.destroyed) {
       sockets.gpspos = new net.Socket();
       sockets.gpspos.connect(gpsposPort, process.env.GPSPOS_SERVER, () => {
         logger.debug(`GPSPOS proxy connected for device ${deviceId}`);
       });
       sockets.gpspos.on('error', (err) => {
-        logger.error(`GPSPOS proxy error for device ${deviceId}: ${err.message}`, { error: err });
+        logger.error(
+          `GPSPOS proxy error for device ${deviceId}: ${err.message}`,
+          { error: err },
+        );
         if (sockets.gpspos) sockets.gpspos.destroy();
         sockets.gpspos = null;
         setTimeout(() => {
-          if (deviceProxySockets.has(deviceId)) forwardToProxy(deviceId, rawHex, serverType);
+          if (deviceProxySockets.has(deviceId))
+            forwardToProxy(deviceId, rawHex, serverType);
         }, 5000);
       });
     }
-    if (sockets.gpspos && !sockets.gpspos.destroyed) sockets.gpspos.write(buffer);
+    if (sockets.gpspos && !sockets.gpspos.destroyed)
+      sockets.gpspos.write(buffer);
   }
 }
 
 async function sendToAPI(endpoint, data) {
   try {
     const response = await fetch(endpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": "GPS-Server/1.0" },
-      body: JSON.stringify(data)
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'GPS-Server/1.0',
+      },
+      body: JSON.stringify(data),
     });
     if (!response.ok) {
-      logger.warn(`API call to ${endpoint} returned ${response.status}`, { status: response.status, data });
+      logger.warn(`API call to ${endpoint} returned ${response.status}`, {
+        status: response.status,
+        data,
+      });
       return null;
     }
     return await response.json();
@@ -128,7 +176,7 @@ const baseServerOptions = {
   debug: true,
   maxConnections: 1000,
   connectionTimeout: 30000,
-  keepAlive: true
+  keepAlive: true,
 };
 
 // ============================================================================
@@ -136,7 +184,9 @@ const baseServerOptions = {
 // ============================================================================
 
 function setupDeviceHandlers(device, connection, serverType) {
-  device.on('connected', () => logger.debug(`Device connected (${serverType})`));
+  device.on('connected', () =>
+    logger.debug(`Device connected (${serverType})`),
+  );
   device.on('disconnected', () => {
     const devId = device.getUID();
     if (devId) {
@@ -146,7 +196,10 @@ function setupDeviceHandlers(device, connection, serverType) {
   });
 
   device.on('new_device_first_time', (device_id, msg_parts) => {
-    logger.debug(`New device first time: ${device_id}`, { device_id, msg_parts });
+    logger.debug(`New device first time: ${device_id}`, {
+      device_id,
+      msg_parts,
+    });
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
   });
 
@@ -197,7 +250,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       online: true,
       timestamp: new Date().toISOString(),
       type: 'heartbeat',
-      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs)
+      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
     }).catch(() => {});
   });
 
@@ -213,10 +266,28 @@ function setupDeviceHandlers(device, connection, serverType) {
     logger.debug(`Location from ${data.device_id}`, {
       device_id: data.device_id,
       latitude: data.latitude,
-      longitude: data.longitude
+      longitude: data.longitude,
     });
 
-    // Build payload with correct protocol fields
+    // Validate that the timestamp from the device is present and valid
+    let timestamp;
+    if (data.date instanceof Date && !isNaN(data.date.getTime())) {
+      timestamp = data.date.toISOString();
+    } else if (typeof data.date === 'string') {
+      const d = new Date(data.date);
+      if (!isNaN(d.getTime())) timestamp = d.toISOString();
+      else timestamp = null;
+    } else {
+      timestamp = null;
+    }
+
+    if (!timestamp) {
+      logger.error(
+        `Invalid or missing timestamp for device ${data.device_id}, location not saved.`,
+      );
+      return; // Do not send to API, but device response already sent
+    }
+
     const payload = {
       device_id: data.device_id,
       latitude: data.latitude,
@@ -226,15 +297,17 @@ function setupDeviceHandlers(device, connection, serverType) {
       altitude: data.height || data.altitude || 0,
       satellites: data.satellites || 0,
       device_status: data.device_status || {},
-      timestamp: data.date instanceof Date ? data.date.toISOString() : new Date().toISOString(),
+      timestamp,
       raw_data: msg_parts.raw_hex,
       type: 'location',
-      // Set protocol name
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isTerminalInList(data.device_id, terminalLists[serverType].crs)
+      crs_proxy: isTerminalInList(
+        data.device_id,
+        terminalLists[serverType].crs,
+      ),
     };
 
-    // For GT06, include the numeric protocol_id if it exists
+    // For GT06, include numeric protocol_id if present
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
       payload.protocol_id = msg_parts.protocol_id;
     }
@@ -247,7 +320,28 @@ function setupDeviceHandlers(device, connection, serverType) {
     else device.adapter.send_alarm_response(msg_parts);
 
     forwardToProxy(alarmData.device_id, msg_parts.raw_hex, serverType);
-    logger.warn(`Alarm from ${alarmData.device_id}: ${alarmData.alarm_type}`, { alarmData });
+    logger.warn(`Alarm from ${alarmData.device_id}: ${alarmData.alarm_type}`, {
+      alarmData,
+    });
+
+    // Validate timestamp
+    let timestamp;
+    if (alarmData.date instanceof Date && !isNaN(alarmData.date.getTime())) {
+      timestamp = alarmData.date.toISOString();
+    } else if (typeof alarmData.date === 'string') {
+      const d = new Date(alarmData.date);
+      if (!isNaN(d.getTime())) timestamp = d.toISOString();
+      else timestamp = null;
+    } else {
+      timestamp = null;
+    }
+
+    if (!timestamp) {
+      logger.error(
+        `Invalid or missing timestamp for alarm from device ${alarmData.device_id}, alarm not saved.`,
+      );
+      return;
+    }
 
     const alarmPayload = {
       device_id: alarmData.device_id,
@@ -258,10 +352,13 @@ function setupDeviceHandlers(device, connection, serverType) {
       speed: alarmData.speed || 0,
       device_status: alarmData.device_status || {},
       raw_data: alarmData.raw_data || msg_parts.raw_hex,
-      timestamp: alarmData.date instanceof Date ? alarmData.date.toISOString() : new Date().toISOString(),
+      timestamp,
       type: 'alarm',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isTerminalInList(alarmData.device_id, terminalLists[serverType].crs)
+      crs_proxy: isTerminalInList(
+        alarmData.device_id,
+        terminalLists[serverType].crs,
+      ),
     };
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
       alarmPayload.protocol_id = msg_parts.protocol_id;
@@ -278,11 +375,14 @@ function setupDeviceHandlers(device, connection, serverType) {
       altitude: alarmData.height || 0,
       satellites: alarmData.satellites || 0,
       device_status: alarmData.device_status || {},
-      timestamp: alarmData.date instanceof Date ? alarmData.date.toISOString() : new Date().toISOString(),
+      timestamp,
       raw_data: alarmData.raw_data || msg_parts.raw_hex,
       type: 'location',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isTerminalInList(alarmData.device_id, terminalLists[serverType].crs)
+      crs_proxy: isTerminalInList(
+        alarmData.device_id,
+        terminalLists[serverType].crs,
+      ),
     };
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
       locPayload.protocol_id = msg_parts.protocol_id;
@@ -294,7 +394,11 @@ function setupDeviceHandlers(device, connection, serverType) {
     device.adapter.run_other(msg_parts.cmd, msg_parts);
     forwardToProxy(device_id, msg_parts.raw_hex, serverType);
 
-    if (serverType === 'ut04s' && msg_parts.cmd === '0704' && msg_parts.parsed_batch) {
+    if (
+      serverType === 'ut04s' &&
+      msg_parts.cmd === '0704' &&
+      msg_parts.parsed_batch
+    ) {
       for (const loc of msg_parts.parsed_batch) {
         sendToAPI(API_ENDPOINTS.LOCATION, {
           device_id,
@@ -309,13 +413,20 @@ function setupDeviceHandlers(device, connection, serverType) {
           type: 'location',
           protocol: 'JT808',
           batch_upload: true,
-          crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs)
+          crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
         }).catch(() => {});
       }
-    } else if (serverType === 'ut04s' && msg_parts.cmd === '0702' && msg_parts.parsed_driver) {
+    } else if (
+      serverType === 'ut04s' &&
+      msg_parts.cmd === '0702' &&
+      msg_parts.parsed_driver
+    ) {
       logger.debug('Driver info received:', msg_parts.parsed_driver);
     } else {
-      logger.debug(`Unhandled other command for ${serverType}: ${msg_parts.cmd}`, { msg_parts });
+      logger.debug(
+        `Unhandled other command for ${serverType}: ${msg_parts.cmd}`,
+        { msg_parts },
+      );
     }
   });
 }
@@ -335,13 +446,20 @@ function startUT04SServer() {
     setupDeviceHandlers(device, connection, 'ut04s');
 
     connection.on('error', (err) => {
-      logger.error(`UT04S connection error for device ${device.getUID ? device.getUID() : 'unknown'}: ${err.message}`, { error: err });
+      logger.error(
+        `UT04S connection error for device ${device.getUID ? device.getUID() : 'unknown'}: ${err.message}`,
+        { error: err },
+      );
     });
     connection.on('close', () => {
-      logger.debug(`UT04S connection closed for device ${device.getUID ? device.getUID() : 'unknown'}`);
+      logger.debug(
+        `UT04S connection closed for device ${device.getUID ? device.getUID() : 'unknown'}`,
+      );
     });
     connection.on('timeout', () => {
-      logger.warn(`UT04S connection timeout for device ${device.getUID ? device.getUID() : 'unknown'}`);
+      logger.warn(
+        `UT04S connection timeout for device ${device.getUID ? device.getUID() : 'unknown'}`,
+      );
     });
   });
 
@@ -360,20 +478,27 @@ function startGT06Server() {
   const gt06Options = {
     ...baseServerOptions,
     port: process.env.GPS_SERVER_PORT_GT06,
-    device_adapter: "GT06",
+    device_adapter: 'GT06',
   };
 
   const gt06Server = gps.server(gt06Options, (device, connection) => {
     setupDeviceHandlers(device, connection, 'gt06');
 
     connection.on('error', (err) => {
-      logger.error(`GT06 connection error for device ${device.getUID ? device.getUID() : 'unknown'}: ${err.message}`, { error: err });
+      logger.error(
+        `GT06 connection error for device ${device.getUID ? device.getUID() : 'unknown'}: ${err.message}`,
+        { error: err },
+      );
     });
     connection.on('close', () => {
-      logger.debug(`GT06 connection closed for device ${device.getUID ? device.getUID() : 'unknown'}`);
+      logger.debug(
+        `GT06 connection closed for device ${device.getUID ? device.getUID() : 'unknown'}`,
+      );
     });
     connection.on('timeout', () => {
-      logger.warn(`GT06 connection timeout for device ${device.getUID ? device.getUID() : 'unknown'}`);
+      logger.warn(
+        `GT06 connection timeout for device ${device.getUID ? device.getUID() : 'unknown'}`,
+      );
     });
   });
 
@@ -392,7 +517,7 @@ const gt06Server = startGT06Server();
 
 logger.info('GPS servers started', {
   ut04s_port: process.env.GPS_SERVER_PORT_JT808,
-  gt06_port: process.env.GPS_SERVER_PORT_GT06
+  gt06_port: process.env.GPS_SERVER_PORT_GT06,
 });
 
 // ============================================================================
@@ -404,7 +529,12 @@ function gracefulShutdown(signal) {
 
   const closeServer = (server) => {
     if (server && typeof server.close === 'function') server.close(() => {});
-    else if (server && server.server && typeof server.server.close === 'function') server.server.close(() => {});
+    else if (
+      server &&
+      server.server &&
+      typeof server.server.close === 'function'
+    )
+      server.server.close(() => {});
   };
 
   closeServer(ut04sServer);
