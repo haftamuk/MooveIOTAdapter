@@ -14,7 +14,7 @@ const adapter = function (device) {
     end: '7e',
     separator: '',
   };
-  this.device = device;
+  this.device = device;   // DEBUG: now we have device reference
   this.otherSerial = 1;
 
   const converter = {
@@ -120,6 +120,10 @@ const adapter = function (device) {
     logger.debug('UT04S.JS SENDING RESPONSE TO DEVICE');
     logger.debug(`Response: ${response.toUpperCase()}`);
     logger.debug('========================================');
+    // DEBUG: log custom message
+    if (this.device && this.device.logDebug) {
+      this.device.logDebug(`Sending response: cmd=0x${responseCmd}, seq=${message_serial_number}, result=${result}, raw=${response.toUpperCase()}`);
+    }
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -184,6 +188,10 @@ const adapter = function (device) {
         logger.debug('========================================');
         logger.debug(`Register response: ${response.toUpperCase()}`);
         logger.debug('========================================');
+        // DEBUG:
+        if (this.device && this.device.logDebug) {
+          this.device.logDebug(`Sending register response (8100) with auth code`);
+        }
         this.device.send(Buffer.from(response, 'hex'));
 
     } catch (error) {
@@ -196,6 +204,10 @@ const adapter = function (device) {
         const core = header + body;
         const checksum = this.calcChecksum(core);
         const response = msgParts.start + core + checksum + msgParts.finish;
+        // DEBUG:
+        if (this.device && this.device.logDebug) {
+          this.device.logDebug(`Sending register response (8100) with error result`);
+        }
         this.device.send(Buffer.from(response, 'hex'));
     }
   };
@@ -297,6 +309,10 @@ const adapter = function (device) {
       const loc = this.parse_location_data(msgParts.data);
       if (!loc) throw new Error('Failed to parse location data');
       msgParts.parsed_location = loc;
+      // DEBUG: log location details
+      if (this.device && this.device.logDebug) {
+        this.device.logDebug(`LOCATION: lat=${loc.latitude}, lng=${loc.longitude}, speed=${loc.speed}, time=${loc.timestamp.toISOString()}`);
+      }
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
       logger.error('Location report parsing failed:', error);
@@ -311,6 +327,10 @@ const adapter = function (device) {
       if (!loc) throw new Error('Failed to parse alarm data');
       const alarmType = this.get_alarm_type(loc.alarm_flag);
       msgParts.parsed_alarm = { loc, alarmType };
+      // DEBUG: log alarm details
+      if (this.device && this.device.logDebug) {
+        this.device.logDebug(`ALARM: type=${alarmType}, flag=${loc.alarm_flag.toString(16)}, lat=${loc.latitude}, lng=${loc.longitude}, time=${loc.timestamp.toISOString()}`);
+      }
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
       logger.error('Alarm report parsing failed:', error);
@@ -430,6 +450,10 @@ const adapter = function (device) {
 
       msgParts.parsed_batch = locations;
       logger.debug(`batch_location: parsed ${locations.length} locations`);
+      // DEBUG: log batch info
+      if (this.device && this.device.logDebug) {
+        this.device.logDebug(`Batch location: ${locations.length} items`);
+      }
       this.send_response('8001', msgParts, message_serial_number, '00');
     } catch (error) {
       logger.error('Batch location parsing failed:', error);

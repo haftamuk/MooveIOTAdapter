@@ -1,3 +1,93 @@
+Here's a section you can add to your `README.md` to document the new protocol debugging feature:
+
+---
+
+## Protocol-Level Debugging
+
+The GPS server includes a configurable protocol debugger that logs raw hex communication and parsed message details for specific devices. This is invaluable for diagnosing communication issues, especially when devices unexpectedly go offline.
+
+### How It Works
+
+For each device you enable debugging on, the server creates a separate log file named `<device_imei>.log` inside the `debug_logs/` folder. Every incoming and outgoing raw message is recorded with a timestamp and direction (`IN`/`OUT`). Additionally, after parsing, a `PARSED` line summarises the message type, command, device ID, and a preview of the data. Protocol‑specific context (location coordinates, alarm type, response details) is also added using custom log entries.
+
+### Enabling Debugging
+
+You can specify which devices to debug using one of two methods:
+
+#### 1. JSON Configuration File (Recommended)
+
+Create a file named `debugDevices.json` in the project root (same directory as `index.js`). The file must contain a JSON array of IMEI strings:
+
+```json
+[
+  "123456789012345",
+  "987654321098765"
+]
+```
+
+The server reads this file at startup. To add or remove devices, edit the file and restart the server (or implement dynamic reloading – see “Advanced” below).
+
+#### 2. Environment Variable
+
+Set the `DEBUG_DEVICES` environment variable with a comma‑separated list of IMEIs. For example, in your `.env` file:
+
+```
+DEBUG_DEVICES=123456789012345,987654321098765
+```
+
+If both the JSON file and the environment variable are present, the JSON file takes precedence.
+
+### Log File Location and Format
+
+- **Directory:** `debug_logs/` (created automatically if it doesn’t exist)
+- **Filename:** `<device_imei>.log` (e.g., `123456789012345.log`)
+- **Each line** starts with an ISO 8601 timestamp followed by one of:
+  - `IN:` – raw hex data received from the device
+  - `OUT:` – raw hex data sent to the device
+  - `PARSED:` – a summary of the parsed message (action, command, protocol, device ID, serial number, data preview)
+  - Custom messages (e.g., `LOCATION:`, `ALARM:`, `Sending response:`) that provide additional context
+
+#### Example Log Snippet (JT808)
+
+```
+[2025-03-06T10:15:30.123Z] IN: 7e0200002a12345678901234500010000000000102030405060708091011121314151617181920212223242526272829303132333435363738397e
+[2025-03-06T10:15:30.456Z] PARSED: action=ping, cmd=0200, device_id=123456789012345, serial=0010, data=0000000102030405… (location data)
+[2025-03-06T10:15:30.789Z] LOCATION: lat=40.7128, lng=-74.0060, speed=45.2, time=2025-03-06T10:15:30.000Z
+[2025-03-06T10:15:30.912Z] Sending response: cmd=0x8001, seq=0001, result=00, raw=7e80010005123456789012345000010001020000017e
+[2025-03-06T10:15:30.913Z] OUT: 7e80010005123456789012345000010001020000017e
+```
+
+#### Example Log Snippet (GT06)
+
+```
+[2025-03-06T10:16:00.123Z] IN: 78780f1344041787012345678901234500010d0a
+[2025-03-06T10:16:00.456Z] PARSED: action=heartbeat, cmd=ping, protocol=0x13, device_id=123456789012345, serial=0001, data=44…
+[2025-03-06T10:16:00.789Z] Sending heartbeat response (protocol 0x13, serial 0001)
+[2025-03-06T10:16:00.790Z] OUT: 787805130001c38d0d0a
+```
+
+### Using the Logs to Diagnose Issues
+
+1. **Identify the time a device went offline** from your main application logs.
+2. Open the corresponding `<imei>.log` file and look at the entries just before that time.
+3. **Check for a missing response**: If you see an `IN` line for a message that requires an acknowledgement (e.g., a location report) but no corresponding `OUT` line, the server may have failed to reply – investigate adapter logic or network issues.
+4. **Look for parsing errors**: A `PARSED` line with `action=noop` or a truncated data preview suggests the adapter rejected the message. Compare the raw hex with the protocol specification.
+5. **Observe the last activity**: If the last entry is an `OUT` line and no further `IN` lines appear, the device stopped sending data – possible power loss, network disconnect, or device crash.
+6. **Correlate with application logs**: Match timestamps with your main logs to see if any errors or exceptions occurred at that moment.
+
+### Performance Considerations
+
+- Debugging is **only enabled for devices you explicitly list**, so there is no performance impact on other devices.
+- Log files are plain text and will grow over time. For long‑running debugging, consider implementing log rotation (e.g., using `logrotate` on Linux, or integrating a library like `winston-daily-rotate-file`).
+- The `debug_logs` directory should have appropriate permissions (`700` or `750`) to protect sensitive data (IMEIs, raw hex).
+
+### Disabling Debugging
+
+To stop debugging a device, simply remove its IMEI from the JSON file or environment variable and restart the server. Alternatively, you can enhance the configuration module to watch the JSON file for changes and update the `Set` in real time (see “Advanced” below).
+
+
+
+
 # Moove IoT GPS Adapter
 
 A high‑performance TCP server for handling GPS tracker protocols, designed to forward raw data to external CRS/GPSPOS servers and integrate with the Moove backend API. Built with Node.js and the **EventEmitter** pattern, it supports multiple device protocols through pluggable adapters.

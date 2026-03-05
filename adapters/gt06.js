@@ -12,7 +12,7 @@ var adapter = function (device) {
   }
 
   this.format = {'start': '78', 'end': '0d0a', 'separator': ''};
-  this.device = device;
+  this.device = device;   // DEBUG: now we have device reference
   this.__count = 1;
 
   /*******************************************
@@ -136,7 +136,10 @@ var adapter = function (device) {
     logger.debug(`authorize called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const response = this.buildResponse('01', serial);
-    logger.debug(`Sending login response: ${response}`);
+    // DEBUG: log custom message
+    if (this.device && this.device.logDebug) {
+      this.device.logDebug(`Sending login response (protocol 0x01, serial ${serial})`);
+    }
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -144,7 +147,10 @@ var adapter = function (device) {
     logger.debug(`receive_heartbeat called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const response = this.buildResponse('13', serial);
-    logger.debug(`Sending heartbeat response: ${response}`);
+    // DEBUG:
+    if (this.device && this.device.logDebug) {
+      this.device.logDebug(`Sending heartbeat response (protocol 0x13, serial ${serial})`);
+    }
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -153,7 +159,10 @@ var adapter = function (device) {
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
     const response = this.buildResponse(protocol, serial);
-    logger.debug(`Sending alarm response: ${response}`);
+    // DEBUG:
+    if (this.device && this.device.logDebug) {
+      this.device.logDebug(`Sending alarm response (protocol 0x${protocol}, serial ${serial})`);
+    }
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -166,14 +175,22 @@ var adapter = function (device) {
       var str = msg_parts.data_body || msg_parts.data;
       logger.debug(`Parsing location data, length: ${str.length}`);
 
+      let gpsData;
       if (str.length >= 38) {
-        return this.parse_standard_gps_data(str, msg_parts);
+        gpsData = this.parse_standard_gps_data(str, msg_parts);
       } else if (str.length >= 20) {
-        return this.parse_compact_gps_data(str, msg_parts);
+        gpsData = this.parse_compact_gps_data(str, msg_parts);
       } else {
         logger.error(`GPS data too short: ${str.length}`);
         return false;
       }
+
+      // DEBUG: log location details
+      if (this.device && this.device.logDebug && gpsData) {
+        this.device.logDebug(`LOCATION: lat=${gpsData.latitude}, lng=${gpsData.longitude}, speed=${gpsData.speed}, time=${gpsData.date}`);
+      }
+
+      return gpsData;
     } catch (error) {
       logger.error('Error parsing ping data:', error);
       return false;
@@ -346,6 +363,11 @@ var adapter = function (device) {
         lat: data.latitude,
         lng: data.longitude
       });
+
+      // DEBUG: log alarm details
+      if (this.device && this.device.logDebug) {
+        this.device.logDebug(`ALARM: type=${data.alarm_type}, code=${data.alarm_code}, lat=${data.latitude}, lng=${data.longitude}, time=${data.date}`);
+      }
 
       return data;
     } catch (error) {
