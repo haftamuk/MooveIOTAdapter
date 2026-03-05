@@ -1,10 +1,10 @@
 // File: UT04SAdapter/node_modules/gps-tracking/lib/adapters/JT808.js
 const f = require('../lib/functions');
-const logger = require('../lib/logger'); // <-- added
+const logger = require('../lib/logger');
 
 exports.protocol = 'JT808';
 exports.model_name = 'JT808';
-exports.compatible_hardware = ['Integrated GPS Speed Limiter UT04S/unigiard'];
+exports.compatible_hardware = ['UT04S'];
 
 const adapter = function (device) {
   if (!(this instanceof adapter)) return new adapter(device);
@@ -33,13 +33,14 @@ const adapter = function (device) {
 
   function parseBCDTimestamp(bcdTime) {
     if (bcdTime.length !== 12) return new Date();
-    const year = '20' + bcdTime.substring(0, 2);
-    const month = bcdTime.substring(2, 4);
-    const day = bcdTime.substring(4, 6);
-    const hour = bcdTime.substring(6, 8);
-    const minute = bcdTime.substring(8, 10);
-    const second = bcdTime.substring(10, 12);
-    return new Date(`${year}-${month}-${day}T${hour}:${minute}:${second}Z`);
+    const year = parseInt(bcdTime.substring(0, 2), 16) + 2000;
+    const month = parseInt(bcdTime.substring(2, 4), 16) - 1; // JS months 0‑11
+    const day = parseInt(bcdTime.substring(4, 6), 16);
+    const hour = parseInt(bcdTime.substring(6, 8), 16);
+    const minute = parseInt(bcdTime.substring(8, 10), 16);
+    const second = parseInt(bcdTime.substring(10, 12), 16);
+    // Use UTC to avoid timezone shifts
+    return new Date(Date.UTC(year, month, day, hour, minute, second));
   }
 
   // ------------------------------------------------------------------------
@@ -140,7 +141,7 @@ const adapter = function (device) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-this.register = async function (responseSerial, msgParts) {
+  this.register = async function (responseSerial, msgParts) {
     logger.debug(`register called for device: ${this.device.getUID()}`);
     try {
         // Parse registration data (optional, kept for logging)
@@ -197,7 +198,7 @@ this.register = async function (responseSerial, msgParts) {
         const response = msgParts.start + core + checksum + msgParts.finish;
         this.device.send(Buffer.from(response, 'hex'));
     }
-};
+  };
 
   this.authorize = async function (message_serial_number, msgParts) {
     logger.debug(`authorize called for device: ${this.device.getUID()}`);
@@ -217,14 +218,14 @@ this.register = async function (responseSerial, msgParts) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-this.parse_location_data = function (dataStr) {
+  this.parse_location_data = function (dataStr) {
     logger.debug(`parse_location_data: ${dataStr}`);
     if (!dataStr || dataStr.length < 56) {
         logger.error('Location data too short:', dataStr);
         return null;
     }
 
-    // Helper: convert 6‑byte BCD (YYMMDDhhmmss) to Date
+    // Helper: convert 6‑byte BCD (YYMMDDhhmmss) to Date (UTC)
     function parseBCDTimestamp(hex) {
         try {
             const year = parseInt(hex.substring(0, 2), 16) + 2000;
@@ -233,8 +234,7 @@ this.parse_location_data = function (dataStr) {
             const hour = parseInt(hex.substring(6, 8), 16);
             const minute = parseInt(hex.substring(8, 10), 16);
             const second = parseInt(hex.substring(10, 12), 16);
-            const date = new Date(year, month, day, hour, minute, second);
-            // Validate the date
+            const date = new Date(Date.UTC(year, month, day, hour, minute, second));
             if (isNaN(date.getTime())) {
                 throw new Error('Invalid date components');
             }
@@ -250,7 +250,7 @@ this.parse_location_data = function (dataStr) {
     const latitude = parseInt(dataStr.substring(16, 24), 16) / 1000000;
     const longitude = parseInt(dataStr.substring(24, 32), 16) / 1000000;
     const altitude = parseInt(dataStr.substring(32, 36), 16);
-    const speed = parseInt(dataStr.substring(36, 40), 16) / 10;
+    const speed = parseInt(dataStr.substring(36, 40), 16) / 10; // in km/h
     const direction = parseInt(dataStr.substring(40, 44), 16);
     const timestamp = parseBCDTimestamp(dataStr.substring(44, 56));
 
@@ -286,10 +286,10 @@ this.parse_location_data = function (dataStr) {
         altitude: altitude,
         speed: speed,
         direction: direction,
-        timestamp: timestamp,               // now a Date object
+        timestamp: timestamp,               // now a Date object (UTC)
         additional_info: additionalInfo
     };
-};
+  };
 
   this.location_report = async function (message_serial_number, msgParts) {
     logger.debug(`location_report called for device: ${this.device.getUID()}`);
@@ -373,7 +373,7 @@ this.parse_location_data = function (dataStr) {
       height: loc.altitude,
       speed: loc.speed,
       direction: loc.direction,
-      date: loc.timestamp,
+      date: loc.timestamp, // Date object (UTC)
       orientation: loc.direction.toString(),
       io_state: loc.additional_info.io_status ? loc.additional_info.io_status.toString(16) : '',
       mile_data: loc.additional_info.mileage || '',

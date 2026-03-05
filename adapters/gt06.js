@@ -1,6 +1,6 @@
 /* Comprehensive GT06 Protocol Adapter with Enhanced Alarm Parsing */
 const f = require('../lib/functions');
-const logger = require('../lib/logger'); // <-- added
+const logger = require('../lib/logger');
 
 exports.protocol = 'GT06N';
 exports.model_name = 'GT06N';
@@ -11,7 +11,7 @@ var adapter = function (device) {
     return new adapter(device);
   }
 
-  this.format = {'start': '78', 'end': '0d0a', 'separator': ''}; // Note: start is '78' (two bytes: '7878' will be found as two consecutive '78' in the buffer)
+  this.format = {'start': '78', 'end': '0d0a', 'separator': ''};
   this.device = device;
   this.__count = 1;
 
@@ -49,7 +49,7 @@ var adapter = function (device) {
       parts['protocol_id'] = hexData.substr(6, 2).toLowerCase();
       logger.debug(`Protocol ID: ${parts['protocol_id']}`);
 
-      const dataStart = 8; // After start(4) + length(2) + protocol(2)
+      const dataStart = 8;
       const dataEnd = 8 + (parts['length'] - 1) * 2;
       parts['data'] = hexData.substring(dataStart, dataStart + (parts['length'] - 1) * 2);
 
@@ -62,7 +62,6 @@ var adapter = function (device) {
         parts['device_id'] = '';
       }
 
-      // Ensure raw_hex is present for consistent handling in index.js
       parts.raw_hex = hexData;
 
       logger.debug(`Parsed: Protocol=${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
@@ -75,10 +74,9 @@ var adapter = function (device) {
 
   this.extract_serial_crc = function(parts) {
     const data = parts['data'];
-    // Last 8 hex chars = 4 bytes = serial (2) + CRC (2)
     if (data.length >= 8) {
-      parts['serial_number'] = data.substr(data.length - 8, 4); // 2 bytes
-      parts['crc'] = data.substr(data.length - 4, 4);           // 2 bytes
+      parts['serial_number'] = data.substr(data.length - 8, 4);
+      parts['crc'] = data.substr(data.length - 4, 4);
       parts['data_body'] = data.substring(0, data.length - 8);
     } else {
       parts['data_body'] = data;
@@ -126,7 +124,6 @@ var adapter = function (device) {
     return str;
   };
 
-  // Helper to build a standard response (length=0x05)
   this.buildResponse = function (protocol, serial) {
     const withoutCRC = '7878' + '05' + protocol + serial;
     const crc = f.crc16(Buffer.from(withoutCRC, 'hex'));
@@ -154,7 +151,7 @@ var adapter = function (device) {
   this.send_alarm_response = function (msg_parts) {
     logger.debug(`send_alarm_response called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
-    const protocol = msg_parts.protocol_id; // use same protocol as received
+    const protocol = msg_parts.protocol_id;
     const response = this.buildResponse(protocol, serial);
     logger.debug(`Sending alarm response: ${response}`);
     this.device.send(Buffer.from(response, 'hex'));
@@ -192,7 +189,8 @@ var adapter = function (device) {
     const hour = parseInt(dateHex.substr(6, 2), 16);
     const minute = parseInt(dateHex.substr(8, 2), 16);
     const second = parseInt(dateHex.substr(10, 2), 16);
-    const date = new Date(year, month - 1, day, hour, minute, second);
+    // Use UTC to avoid timezone shifts
+    const date = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
 
     const satellites = parseInt(str.substr(12, 2), 16);
 
@@ -264,7 +262,7 @@ var adapter = function (device) {
 
   this.parse_compact_gps_data = function (str, msg_parts) {
     logger.debug(`parse_compact_gps_data: data=${str}`);
-    const date = new Date();
+    const date = new Date(); // fallback to current time
     let latitude = 0;
     let longitude = 0;
     let speed = 0;
@@ -482,7 +480,6 @@ var adapter = function (device) {
 
   this.synchronous_clock = function (msg_parts) {
     logger.debug(`synchronous_clock called (not implemented)`);
-    // Not implemented
   };
 
   this.run_other = function (cmd, msg_parts) {
@@ -491,12 +488,10 @@ var adapter = function (device) {
 
   this.request_login_to_device = function () {
     logger.debug(`request_login_to_device called (not implemented)`);
-    // Not implemented
   };
 
   this.set_refresh_time = function (interval, duration) {
     logger.debug(`set_refresh_time called (not implemented)`);
-    // Not implemented
   };
 };
 
