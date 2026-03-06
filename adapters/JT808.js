@@ -1,4 +1,4 @@
-// File: UT04SAdapter/node_modules/gps-tracking/lib/adapters/JT808.js
+// File: lib/adapters/JT808.js
 const f = require('../lib/functions');
 const logger = require('../lib/logger');
 
@@ -14,67 +14,147 @@ const adapter = function (device) {
     end: '7e',
     separator: '',
   };
-  this.device = device;   // DEBUG: now we have device reference
+  this.device = device;
   this.otherSerial = 1;
 
-  const converter = {
-    '0': '0000', '1': '0001', '2': '0010', '3': '0011',
-    '4': '0100', '5': '0101', '6': '0110', '7': '0111',
-    '8': '1000', '9': '1001', 'a': '1010', 'b': '1011',
-    'c': '1100', 'd': '1101', 'e': '1110', 'f': '1111'
-  };
+  // Cache for sub‑package reassembly: key = deviceId_msgSerial, value = { total, received: [] }
+  this.subpackageCache = new Map();
 
-  function hex2bin(hex) {
-    hex = hex.replace('0x', '').toLowerCase();
-    let out = '';
-    for (const c of hex) out += converter[c];
-    return out;
-  }
+  // ------------------------------------------------------------------------
+  // Helper: parse BCD timestamp (YYMMDDhhmmss) to Date (GMT+8 adjusted)
+  // ------------------------------------------------------------------------
+  function parseBCDTimestamp(bcdHex) {
+    if (bcdHex.length !== 12) return new Date(0); // invalid
+    const year = parseInt(bcdHex.substring(0, 2), 16) + 2000;
+    const month = parseInt(bcdHex.substring(2, 4), 16) - 1; // 0‑11
+    const day = parseInt(bcdHex.substring(4, 6), 16);
+    const hour = parseInt(bcdHex.substring(6, 8), 16);
+    const minute = parseInt(bcdHex.substring(8, 10), 16);
+    const second = parseInt(bcdHex.substring(10, 12), 16);
 
-  function parseBCDTimestamp(bcdTime) {
-    if (bcdTime.length !== 12) return new Date();
-    const year = parseInt(bcdTime.substring(0, 2), 16) + 2000;
-    const month = parseInt(bcdTime.substring(2, 4), 16) - 1; // JS months 0‑11
-    const day = parseInt(bcdTime.substring(4, 6), 16);
-    const hour = parseInt(bcdTime.substring(6, 8), 16);
-    const minute = parseInt(bcdTime.substring(8, 10), 16);
-    const second = parseInt(bcdTime.substring(10, 12), 16);
-    // Use UTC to avoid timezone shifts
-    return new Date(Date.UTC(year, month, day, hour, minute, second));
+    // Convert GMT+8 to UTC by subtracting 8 hours
+    let utcHour = hour - 8;
+    let utcDay = day;
+    let utcMonth = month;
+    let utcYear = year;
+
+    if (utcHour < 0) {
+      utcHour += 24;
+      utcDay -= 1;
+      if (utcDay < 1) {
+        // move to previous month – simplified: assume not crossing year boundary
+        const prevMonthLastDay = new Date(year, month, 0).getDate();
+        utcDay = prevMonthLastDay;
+        utcMonth -= 1;
+        if (utcMonth < 0) {
+          utcMonth = 11;
+          utcYear -= 1;
+        }
+      }
+    }
+
+    return new Date(Date.UTC(utcYear, utcMonth, utcDay, utcHour, minute, second));
   }
 
   // ------------------------------------------------------------------------
-  // Parse incoming data (called by the library)
+  // Calculate XOR checksum of a buffer (excluding the checksum byte itself)
+  // ------------------------------------------------------------------------
+  function calculateChecksum(buf) {
+    let xor = 0;
+    for (let i = 0; i < buf.length; i++) {
+      xor ^= buf[i];
+    }
+    return xor;
+  }
+
+  // ------------------------------------------------------------------------
+  // Parse incoming data (called by device.js with unescaped buffer)
   // ------------------------------------------------------------------------
   this.parse_data = function (data) {
-    data = data.toString('hex');
-    logger.debug(`JT808 parse_data: raw hex=${data}`);
+    // data is a Buffer of the unescaped inner packet (without start/end markers)
+    const hex = data.toString('hex').toUpperCase();
+    logger.debug(`JT808 parse_data: unescaped hex=${hex}`);
 
-    if (data.length < 26) {
-      logger.error('Message too short:', data);
+    if (data.length < 13) { // minimum header length
+      logger.error('Message too short:', hex);
       return false;
     }
 
+    // Extract header fields
+    const msgId = data.readUInt16BE(0).toString(16).padStart(4, '0').toUpperCase();
+    const attr = data.readUInt16BE(2);
+    const bodyLen = attr & 0x3FF;                     // bits 0‑9
+    const encryption = (attr >> 10) & 0x07;            // bits 10‑12
+    const subpackage = (attr >> 13) & 0x01;            // bit 13
+    // bits 14‑15 reserved
+
+    // Terminal phone number (BCD[6])
+    const phoneBcd = data.slice(4, 10).toString('hex').toUpperCase();
+    // Pad with leading zeros to 12 digits if needed
+    const device_id = phoneBcd.padStart(12, '0');
+
+    const msgSerialNo = data.readUInt16BE(10).toString(16).padStart(4, '0').toUpperCase();
+
+    let headerLen = 12; // msgId(2)+attr(2)+phone(6)+serial(2) = 12 bytes
+    let totalPackages = 1;
+    let packageNo = 1;
+    let bodyStart = 12;
+
+    if (subpackage) {
+      headerLen += 4; // total packages (2) + package no (2)
+      if (data.length < headerLen) {
+        logger.error('Header too short for subpackage info');
+        return false;
+      }
+      totalPackages = data.readUInt16BE(12);
+      packageNo = data.readUInt16BE(14);
+      bodyStart = 16;
+    }
+
+    // Validate total length (header + body + checksum)
+    if (data.length !== headerLen + bodyLen + 1) {
+      logger.error(`Length mismatch: expected ${headerLen + bodyLen + 1}, got ${data.length}`);
+      return false;
+    }
+
+    // Verify checksum
+    const receivedChecksum = data[data.length - 1];
+    const computedChecksum = calculateChecksum(data.slice(0, data.length - 1));
+    if (receivedChecksum !== computedChecksum) {
+      logger.error(`Checksum mismatch: received 0x${receivedChecksum.toString(16)}, computed 0x${computedChecksum.toString(16)}`);
+      return false;
+    }
+
+    const body = data.slice(bodyStart, bodyStart + bodyLen).toString('hex').toUpperCase();
+
+    // Build parts object
     const parts = {
-      start: data.substring(0, 2),
-      cmd: data.substring(2, 6),
-      packet_length: data.substring(6, 10),
-      device_id: data.substring(10, 22),
-      cmd_serial_no: data.substring(22, 26),
-      data: data.substring(26, data.length - 4),
-      cksm: data.substring(data.length - 4, data.length - 2),
-      finish: data.substring(data.length - 2),
-      raw_hex: data
+      start: '7e', // not really used
+      cmd: msgId,
+      packet_length: attr.toString(16).padStart(4, '0'), // for compatibility
+      device_id: device_id,
+      cmd_serial_no: msgSerialNo,
+      data: body,
+      raw_hex: hex,
+      // additional parsed fields
+      msgId,
+      attr,
+      bodyLen,
+      encryption,
+      subpackage,
+      totalPackages,
+      packageNo,
+      msgSerialNo,
     };
 
     // Determine action based on command
-    switch (parts.cmd) {
+    switch (msgId) {
       case '0100': parts.action = 'register'; break;
       case '0002': parts.action = 'heartbeat'; break;
       case '0102': parts.action = 'login_request'; break;
       case '0003': parts.action = 'logout'; break;
       case '0200':
-        const alarmFlag = parts.data.substring(0, 8);
+        const alarmFlag = body.substring(0, 8);
         parts.action = (parseInt(alarmFlag, 16) !== 0) ? 'alarm' : 'ping';
         break;
       case '0704': parts.action = 'batch_location'; break;
@@ -85,14 +165,63 @@ const adapter = function (device) {
     }
 
     logger.debug('========================================');
-    logger.debug('UT04S.JS PARSED DATA');
+    logger.debug('JT808.JS PARSED DATA');
     logger.debug(`Command: ${parts.cmd} Action: ${parts.action}`);
     logger.debug(`Device ID: ${parts.device_id}`);
     logger.debug(`Sequence: ${parts.cmd_serial_no}`);
-    logger.debug(`Data length: ${parts.data.length / 2} bytes`);
+    logger.debug(`Subpackage: ${subpackage ? 'yes' : 'no'} (${packageNo}/${totalPackages})`);
+    logger.debug(`Data length: ${bodyLen} bytes`);
     logger.debug('========================================');
 
+    // If subpackaged, attempt reassembly
+    if (subpackage && totalPackages > 1) {
+      return this.handleSubpackage(parts);
+    }
+
     return parts;
+  };
+
+  // ------------------------------------------------------------------------
+  // Sub‑package reassembly
+  // ------------------------------------------------------------------------
+  this.handleSubpackage = function (parts) {
+    const key = `${parts.device_id}_${parts.msgSerialNo}`;
+    const { totalPackages, packageNo, data: bodyHex } = parts;
+
+    let entry = this.subpackageCache.get(key);
+    if (!entry) {
+      entry = {
+        total: totalPackages,
+        received: new Array(totalPackages).fill(null),
+        firstParts: parts, // store header info
+        createdAt: Date.now()
+      };
+      this.subpackageCache.set(key, entry);
+    }
+
+    // Store this package (index 0‑based)
+    entry.received[packageNo - 1] = bodyHex;
+
+    // Check if all received
+    if (entry.received.every(p => p !== null)) {
+      // Reassemble body
+      const fullBody = entry.received.join('');
+      const reassembledParts = { ...entry.firstParts };
+      reassembledParts.data = fullBody;
+      reassembledParts.bodyLen = fullBody.length / 2; // in bytes
+      reassembledParts.subpackage = false; // mark as reassembled
+      reassembledParts.reassembled = true;
+
+      // Clean up cache
+      this.subpackageCache.delete(key);
+
+      logger.debug(`Subpackage reassembly complete for key ${key}`);
+      return reassembledParts;
+    }
+
+    // Not yet complete – return a placeholder (the original parts will be ignored)
+    // The device.js will ignore actions for incomplete subpackages.
+    return { incomplete: true, key, packageNo, totalPackages };
   };
 
   // ------------------------------------------------------------------------
@@ -104,26 +233,26 @@ const adapter = function (device) {
     for (let i = 0; i < bytes.length; i++) {
       xor ^= parseInt(bytes[i], 16);
     }
-    const checksum = xor.toString(16).padStart(2, '0').toUpperCase();
-    logger.debug(`calcChecksum: packet=${packet} -> ${checksum}`);
-    return checksum;
+    return xor.toString(16).padStart(2, '0').toUpperCase();
   };
 
   // ------------------------------------------------------------------------
   // Send a general response (0x8001) to the device
   // ------------------------------------------------------------------------
   this.send_response = function (responseCmd, msgParts, message_serial_number, result = '00') {
-    const core = '8001' + '0005' + msgParts.device_id + message_serial_number + msgParts.cmd_serial_no + msgParts.cmd + result;
+    // Build core: msgId(8001) + attr(0005) + phone + serial + replySerial + replyMsgId + result
+    const replySerial = msgParts.cmd_serial_no; // the serial number of the message we are responding to
+    const core = '8001' + '0005' + msgParts.device_id + message_serial_number + replySerial + msgParts.cmd + result;
     const checksum = this.calcChecksum(core);
-    const response = msgParts.start + core + checksum + msgParts.finish;
+    const response = core + checksum; // without start/end markers
     logger.debug('========================================');
-    logger.debug('UT04S.JS SENDING RESPONSE TO DEVICE');
-    logger.debug(`Response: ${response.toUpperCase()}`);
+    logger.debug('JT808.JS SENDING RESPONSE TO DEVICE');
+    logger.debug(`Response core: ${response}`);
     logger.debug('========================================');
-    // DEBUG: log custom message
     if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending response: cmd=0x${responseCmd}, seq=${message_serial_number}, result=${result}, raw=${response.toUpperCase()}`);
+      this.device.logDebug(`Sending response: cmd=0x${responseCmd}, seq=${message_serial_number}, result=${result}, raw=${response}`);
     }
+    // device.send will add markers and escape
     this.device.send(Buffer.from(response, 'hex'));
   };
 
@@ -184,11 +313,10 @@ const adapter = function (device) {
         const core = header + body;
 
         const checksum = this.calcChecksum(core);
-        const response = msgParts.start + core + checksum + msgParts.finish;
+        const response = core + checksum; // device.send will add markers and escape
         logger.debug('========================================');
-        logger.debug(`Register response: ${response.toUpperCase()}`);
+        logger.debug(`Register response core: ${response}`);
         logger.debug('========================================');
-        // DEBUG:
         if (this.device && this.device.logDebug) {
           this.device.logDebug(`Sending register response (8100) with auth code`);
         }
@@ -203,8 +331,7 @@ const adapter = function (device) {
         const header = '8100' + bodyLength + msgParts.device_id + responseSerial;
         const core = header + body;
         const checksum = this.calcChecksum(core);
-        const response = msgParts.start + core + checksum + msgParts.finish;
-        // DEBUG:
+        const response = core + checksum;
         if (this.device && this.device.logDebug) {
           this.device.logDebug(`Sending register response (8100) with error result`);
         }
@@ -230,6 +357,9 @@ const adapter = function (device) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
+  // ------------------------------------------------------------------------
+  // Location data parsing (with GMT+8 correction)
+  // ------------------------------------------------------------------------
   this.parse_location_data = function (dataStr) {
     logger.debug(`parse_location_data: ${dataStr}`);
     if (!dataStr || dataStr.length < 56) {
@@ -237,32 +367,12 @@ const adapter = function (device) {
         return null;
     }
 
-    // Helper: convert 6‑byte BCD (YYMMDDhhmmss) to Date (UTC)
-    function parseBCDTimestamp(hex) {
-        try {
-            const year = parseInt(hex.substring(0, 2), 16) + 2000;
-            const month = parseInt(hex.substring(2, 4), 16) - 1; // JS months 0‑11
-            const day = parseInt(hex.substring(4, 6), 16);
-            const hour = parseInt(hex.substring(6, 8), 16);
-            const minute = parseInt(hex.substring(8, 10), 16);
-            const second = parseInt(hex.substring(10, 12), 16);
-            const date = new Date(Date.UTC(year, month, day, hour, minute, second));
-            if (isNaN(date.getTime())) {
-                throw new Error('Invalid date components');
-            }
-            return date;
-        } catch (e) {
-            logger.error('Failed to parse BCD timestamp:', hex, e);
-            return new Date(); // fallback to current time
-        }
-    }
-
     const alarmFlag = parseInt(dataStr.substring(0, 8), 16);
     const status = parseInt(dataStr.substring(8, 16), 16);
     const latitude = parseInt(dataStr.substring(16, 24), 16) / 1000000;
     const longitude = parseInt(dataStr.substring(24, 32), 16) / 1000000;
     const altitude = parseInt(dataStr.substring(32, 36), 16);
-    const speed = parseInt(dataStr.substring(36, 40), 16) / 10; // in km/h
+    const speed = parseInt(dataStr.substring(36, 40), 16) / 10; // km/h
     const direction = parseInt(dataStr.substring(40, 44), 16);
     const timestamp = parseBCDTimestamp(dataStr.substring(44, 56));
 
@@ -298,7 +408,7 @@ const adapter = function (device) {
         altitude: altitude,
         speed: speed,
         direction: direction,
-        timestamp: timestamp,               // now a Date object (UTC)
+        timestamp: timestamp,               // Date object (correct UTC)
         additional_info: additionalInfo
     };
   };
@@ -309,7 +419,6 @@ const adapter = function (device) {
       const loc = this.parse_location_data(msgParts.data);
       if (!loc) throw new Error('Failed to parse location data');
       msgParts.parsed_location = loc;
-      // DEBUG: log location details
       if (this.device && this.device.logDebug) {
         this.device.logDebug(`LOCATION: lat=${loc.latitude}, lng=${loc.longitude}, speed=${loc.speed}, time=${loc.timestamp.toISOString()}`);
       }
@@ -327,7 +436,6 @@ const adapter = function (device) {
       if (!loc) throw new Error('Failed to parse alarm data');
       const alarmType = this.get_alarm_type(loc.alarm_flag);
       msgParts.parsed_alarm = { loc, alarmType };
-      // DEBUG: log alarm details
       if (this.device && this.device.logDebug) {
         this.device.logDebug(`ALARM: type=${alarmType}, flag=${loc.alarm_flag.toString(16)}, lat=${loc.latitude}, lng=${loc.longitude}, time=${loc.timestamp.toISOString()}`);
       }
@@ -450,7 +558,6 @@ const adapter = function (device) {
 
       msgParts.parsed_batch = locations;
       logger.debug(`batch_location: parsed ${locations.length} locations`);
-      // DEBUG: log batch info
       if (this.device && this.device.logDebug) {
         this.device.logDebug(`Batch location: ${locations.length} items`);
       }
