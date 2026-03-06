@@ -68,32 +68,31 @@ const adapter = function (device) {
   }
 
   // ------------------------------------------------------------------------
-  // Parse incoming data (called by device.js with unescaped buffer)
+  // Parse unescaped inner buffer (without markers)
   // ------------------------------------------------------------------------
-  this.parse_data = function (data) {
-    // data is a Buffer of the unescaped inner packet (without start/end markers)
-    const hex = data.toString('hex').toUpperCase();
-    logger.debug(`JT808 parse_data: unescaped hex=${hex}`);
+  this.parse_unescaped = function (buf) {
+    const hex = buf.toString('hex').toUpperCase();
+    logger.debug(`JT808 parse_unescaped: hex=${hex}`);
 
-    if (data.length < 13) { // minimum header length
+    if (buf.length < 13) {
       logger.error('Message too short:', hex);
       return false;
     }
 
     // Extract header fields
-    const msgId = data.readUInt16BE(0).toString(16).padStart(4, '0').toUpperCase();
-    const attr = data.readUInt16BE(2);
+    const msgId = buf.readUInt16BE(0).toString(16).padStart(4, '0').toUpperCase();
+    const attr = buf.readUInt16BE(2);
     const bodyLen = attr & 0x3FF;                     // bits 0‑9
     const encryption = (attr >> 10) & 0x07;            // bits 10‑12
     const subpackage = (attr >> 13) & 0x01;            // bit 13
     // bits 14‑15 reserved
 
     // Terminal phone number (BCD[6])
-    const phoneBcd = data.slice(4, 10).toString('hex').toUpperCase();
+    const phoneBcd = buf.slice(4, 10).toString('hex').toUpperCase();
     // Pad with leading zeros to 12 digits if needed
     const device_id = phoneBcd.padStart(12, '0');
 
-    const msgSerialNo = data.readUInt16BE(10).toString(16).padStart(4, '0').toUpperCase();
+    const msgSerialNo = buf.readUInt16BE(10).toString(16).padStart(4, '0').toUpperCase();
 
     let headerLen = 12; // msgId(2)+attr(2)+phone(6)+serial(2) = 12 bytes
     let totalPackages = 1;
@@ -102,30 +101,30 @@ const adapter = function (device) {
 
     if (subpackage) {
       headerLen += 4; // total packages (2) + package no (2)
-      if (data.length < headerLen) {
+      if (buf.length < headerLen) {
         logger.error('Header too short for subpackage info');
         return false;
       }
-      totalPackages = data.readUInt16BE(12);
-      packageNo = data.readUInt16BE(14);
+      totalPackages = buf.readUInt16BE(12);
+      packageNo = buf.readUInt16BE(14);
       bodyStart = 16;
     }
 
     // Validate total length (header + body + checksum)
-    if (data.length !== headerLen + bodyLen + 1) {
-      logger.error(`Length mismatch: expected ${headerLen + bodyLen + 1}, got ${data.length}`);
+    if (buf.length !== headerLen + bodyLen + 1) {
+      logger.error(`Length mismatch: expected ${headerLen + bodyLen + 1}, got ${buf.length}`);
       return false;
     }
 
     // Verify checksum
-    const receivedChecksum = data[data.length - 1];
-    const computedChecksum = calculateChecksum(data.slice(0, data.length - 1));
+    const receivedChecksum = buf[buf.length - 1];
+    const computedChecksum = calculateChecksum(buf.slice(0, buf.length - 1));
     if (receivedChecksum !== computedChecksum) {
       logger.error(`Checksum mismatch: received 0x${receivedChecksum.toString(16)}, computed 0x${computedChecksum.toString(16)}`);
       return false;
     }
 
-    const body = data.slice(bodyStart, bodyStart + bodyLen).toString('hex').toUpperCase();
+    const body = buf.slice(bodyStart, bodyStart + bodyLen).toString('hex').toUpperCase();
 
     // Build parts object
     const parts = {
@@ -182,6 +181,22 @@ const adapter = function (device) {
   };
 
   // ------------------------------------------------------------------------
+  // Main parse_data – receives full message buffer (including markers)
+  // ------------------------------------------------------------------------
+  this.parse_data = function (data) {
+    const hex = data.toString('hex').toUpperCase();
+    logger.debug(`JT808 parse_data: raw hex=${hex}`);
+
+    if (data.length < 2) return false;
+
+    // Remove first and last byte (markers) – assume single-byte markers
+    const innerBuf = data.slice(1, data.length - 1);
+    // Unescape the inner buffer
+    const unescapedBuf = f.unescapeJT808(innerBuf);
+    return this.parse_unescaped(unescapedBuf);
+  };
+
+  // ------------------------------------------------------------------------
   // Sub‑package reassembly
   // ------------------------------------------------------------------------
   this.handleSubpackage = function (parts) {
@@ -219,8 +234,7 @@ const adapter = function (device) {
       return reassembledParts;
     }
 
-    // Not yet complete – return a placeholder (the original parts will be ignored)
-    // The device.js will ignore actions for incomplete subpackages.
+    // Not yet complete – return a placeholder
     return { incomplete: true, key, packageNo, totalPackages };
   };
 
@@ -252,8 +266,10 @@ const adapter = function (device) {
     if (this.device && this.device.logDebug) {
       this.device.logDebug(`Sending response: cmd=0x${responseCmd}, seq=${message_serial_number}, result=${result}, raw=${response}`);
     }
-    // device.send will add markers and escape
-    this.device.send(Buffer.from(response, 'hex'));
+    // Escape the response before sending
+    const responseBuf = Buffer.from(response, 'hex');
+    const escapedBuf = f.escapeJT808(responseBuf);
+    this.device.send(escapedBuf);
   };
 
   this.getNextOtherSerial = function () {
@@ -320,7 +336,10 @@ const adapter = function (device) {
         if (this.device && this.device.logDebug) {
           this.device.logDebug(`Sending register response (8100) with auth code`);
         }
-        this.device.send(Buffer.from(response, 'hex'));
+        // Escape before sending
+        const responseBuf = Buffer.from(response, 'hex');
+        const escapedBuf = f.escapeJT808(responseBuf);
+        this.device.send(escapedBuf);
 
     } catch (error) {
         logger.error('Registration parsing failed:', error);
@@ -335,7 +354,9 @@ const adapter = function (device) {
         if (this.device && this.device.logDebug) {
           this.device.logDebug(`Sending register response (8100) with error result`);
         }
-        this.device.send(Buffer.from(response, 'hex'));
+        const responseBuf = Buffer.from(response, 'hex');
+        const escapedBuf = f.escapeJT808(responseBuf);
+        this.device.send(escapedBuf);
     }
   };
 
