@@ -11,7 +11,8 @@ var adapter = function (device) {
     return new adapter(device);
   }
 
-  this.format = {'start': '78', 'end': '0d0a', 'separator': ''};
+  // Two‑byte start marker and two‑byte end marker (as hex strings)
+  this.format = {'start': '7878', 'end': '0d0a', 'separator': ''};
   this.device = device;
   this.__count = 1;
 
@@ -123,12 +124,17 @@ var adapter = function (device) {
     return str;
   };
 
+  /**
+   * Builds the response payload (without start/end markers).
+   * The payload consists of: length (1 byte) + protocol (1 byte) + serial (2 bytes) + CRC (2 bytes).
+   */
   this.buildResponse = function (protocol, serial) {
-    const withoutCRC = '7878' + '05' + protocol + serial;
-    const crc = f.crc16(Buffer.from(withoutCRC, 'hex'));
-    const response = withoutCRC + crc + '0D0A';
-    logger.debug(`buildResponse: protocol=${protocol}, serial=${serial}, response=${response}`);
-    return response;
+    // Payload: length (always 0x05 for these simple responses) + protocol + serial
+    const payloadWithoutCRC = '05' + protocol + serial;
+    const crc = f.crc16(Buffer.from(payloadWithoutCRC, 'hex'));
+    const fullPayload = payloadWithoutCRC + crc; // 6 bytes total
+    logger.debug(`buildResponse: protocol=${protocol}, serial=${serial}, payload=${fullPayload}`);
+    return fullPayload;
   };
 
   // ------------------------------------------------------------------------
@@ -139,22 +145,22 @@ var adapter = function (device) {
   this.authorize = function (message_serial_number, msg_parts) {
     logger.debug(`authorize called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
-    const response = this.buildResponse('01', serial);
+    const payload = this.buildResponse('01', serial);
     if (this.device && this.device.logDebug) {
       this.device.logDebug(`Sending login response (protocol 0x01, serial ${serial})`);
     }
-    this.device.send(Buffer.from(response, 'hex'));
+    this.device.send(Buffer.from(payload, 'hex'));
   };
 
   // Called from index.js for heartbeat – with ONE argument (msg_parts)
   this.receive_heartbeat = function (msg_parts) {
     logger.debug(`receive_heartbeat called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
-    const response = this.buildResponse('13', serial);
+    const payload = this.buildResponse('13', serial);
     if (this.device && this.device.logDebug) {
       this.device.logDebug(`Sending heartbeat response (protocol 0x13, serial ${serial})`);
     }
-    this.device.send(Buffer.from(response, 'hex'));
+    this.device.send(Buffer.from(payload, 'hex'));
   };
 
   // Automatically called from device.js after a ping (location)
@@ -162,11 +168,11 @@ var adapter = function (device) {
     logger.debug(`send_ping_response called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id; // e.g., '10', '11', '22'
-    const response = this.buildResponse(protocol, serial);
+    const payload = this.buildResponse(protocol, serial);
     if (this.device && this.device.logDebug) {
       this.device.logDebug(`Sending ping response (protocol 0x${protocol}, serial ${serial})`);
     }
-    this.device.send(Buffer.from(response, 'hex'));
+    this.device.send(Buffer.from(payload, 'hex'));
   };
 
   // Called from device.js (received_location_report) – two arguments
@@ -180,14 +186,14 @@ var adapter = function (device) {
     logger.debug(`alarm_report called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
-    const response = this.buildResponse(protocol, serial);
+    const payload = this.buildResponse(protocol, serial);
     if (this.device && this.device.logDebug) {
       this.device.logDebug(`Sending alarm response (protocol 0x${protocol}, serial ${serial})`);
     }
-    this.device.send(Buffer.from(response, 'hex'));
+    this.device.send(Buffer.from(payload, 'hex'));
   };
 
-  // Called from index.js for alarm (compatibility)
+  // Called from index.js for alarm (compatibility) – now delegates to alarm_report
   this.send_alarm_response = function (msg_parts) {
     this.alarm_report('0000', msg_parts); // reuse alarm_report with dummy serial
   };
