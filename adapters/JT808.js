@@ -284,17 +284,17 @@ const adapter = function (device) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
-  // Heartbeat handler
   this.hbt = async function (message_serial_number, msgParts) {
     logger.debug(`hbt called for device: ${this.device.getUID()}`);
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
+  // Added method to match the call from index.js
   this.receive_heartbeat = function(msg_parts) {
-  // Generate a new serial and delegate to the existing hbt method
-  const serial = this.getNextOtherSerial();
-  this.hbt(serial, msg_parts);
-};
+    // Generate a new serial and delegate to the existing hbt method
+    const serial = this.getNextOtherSerial();
+    this.hbt(serial, msg_parts);
+  };
 
   this.register = async function (responseSerial, msgParts) {
     logger.debug(`register called for device: ${this.device.getUID()}`);
