@@ -132,27 +132,72 @@ var adapter = function (device) {
     return response;
   };
 
-  this.authorize = function (msg_parts) {
-    logger.debug(`authorize called for device: ${this.device.getUID()}`);
-    const serial = msg_parts.serial_number || '0001';
-    const response = this.buildResponse('01', serial);
-    // DEBUG: log custom message
-    if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending login response (protocol 0x01, serial ${serial})`);
-    }
-    this.device.send(Buffer.from(response, 'hex'));
-  };
+// authorize now accepts two arguments
+this.authorize = function (message_serial_number, msg_parts) {
+  logger.debug(`authorize called for device: ${this.device.getUID()}`);
+  const serial = msg_parts.serial_number || '0001';  // use original request serial
+  const response = this.buildResponse('01', serial);
+  if (this.device && this.device.logDebug) {
+    this.device.logDebug(`Sending login response (protocol 0x01, serial ${serial})`);
+  }
+  this.device.send(Buffer.from(response, 'hex'));
+};
 
-  this.receive_heartbeat = function (msg_parts) {
-    logger.debug(`receive_heartbeat called for device: ${this.device.getUID()}`);
-    const serial = msg_parts.serial_number || '0001';
-    const response = this.buildResponse('13', serial);
-    // DEBUG:
-    if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending heartbeat response (protocol 0x13, serial ${serial})`);
-    }
-    this.device.send(Buffer.from(response, 'hex'));
-  };
+// receive_heartbeat renamed to hbt for consistency
+this.hbt = function (message_serial_number, msg_parts) {
+  logger.debug(`hbt called for device: ${this.device.getUID()}`);
+  const serial = msg_parts.serial_number || '0001';
+  const response = this.buildResponse('13', serial);
+  if (this.device && this.device.logDebug) {
+    this.device.logDebug(`Sending heartbeat response (protocol 0x13, serial ${serial})`);
+  }
+  this.device.send(Buffer.from(response, 'hex'));
+};
+
+// send_ping_response – called automatically after a location report
+this.send_ping_response = function (msg_parts) {
+  logger.debug(`send_ping_response called for device: ${this.device.getUID()}`);
+  const serial = msg_parts.serial_number || '0001';
+  const protocol = msg_parts.protocol_id;  // e.g., '10', '11', '22'
+  const response = this.buildResponse(protocol, serial);
+  if (this.device && this.device.logDebug) {
+    this.device.logDebug(`Sending ping response (protocol 0x${protocol}, serial ${serial})`);
+  }
+  this.device.send(Buffer.from(response, 'hex'));
+};
+
+// location_report – for compatibility with device.js (may be called by application)
+this.location_report = function (message_serial_number, msg_parts) {
+  this.send_ping_response(msg_parts);
+};
+
+
+// alarm_report – sends acknowledgment for alarms
+this.alarm_report = function (message_serial_number, msg_parts) {
+  logger.debug(`alarm_report called for device: ${this.device.getUID()}`);
+  const serial = msg_parts.serial_number || '0001';
+  const protocol = msg_parts.protocol_id;
+  const response = this.buildResponse(protocol, serial);
+  if (this.device && this.device.logDebug) {
+    this.device.logDebug(`Sending alarm response (protocol 0x${protocol}, serial ${serial})`);
+  }
+  this.device.send(Buffer.from(response, 'hex'));
+};
+
+// Placeholders for other methods to avoid errors
+this.first_time = function (message_serial_number, msg_parts) {
+  logger.debug(`first_time not implemented for GT06`);
+};
+
+
+
+this.register = function (message_serial_number, msg_parts) {
+  logger.debug(`register not implemented for GT06`);
+};
+
+this.logout = function (message_serial_number, msg_parts) {
+  logger.debug(`logout not implemented for GT06`);
+};
 
   this.send_alarm_response = function (msg_parts) {
     logger.debug(`send_alarm_response called for device: ${this.device.getUID()}`);
