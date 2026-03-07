@@ -290,6 +290,12 @@ const adapter = function (device) {
     this.send_response('8001', msgParts, message_serial_number, '00');
   };
 
+  this.receive_heartbeat = function(msg_parts) {
+  // Generate a new serial and delegate to the existing hbt method
+  const serial = this.getNextOtherSerial();
+  this.hbt(serial, msg_parts);
+};
+
   this.register = async function (responseSerial, msgParts) {
     logger.debug(`register called for device: ${this.device.getUID()}`);
     try {
@@ -554,7 +560,6 @@ const adapter = function (device) {
       raw_data: msg_parts.raw_hex
     };
   };
-
   this.batch_location = async function (message_serial_number, msgParts) {
     logger.debug(`batch_location called for device: ${this.device.getUID()}`);
     try {

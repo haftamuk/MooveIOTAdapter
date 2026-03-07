@@ -132,10 +132,11 @@ var adapter = function (device) {
     return response;
   };
 
-// authorize now accepts two arguments
+// authorize (login response) – now uses message_serial_number
 this.authorize = function (message_serial_number, msg_parts) {
   logger.debug(`authorize called for device: ${this.device.getUID()}`);
-  const serial = msg_parts.serial_number || '0001';  // use original request serial
+  // Use the serial from the request (or fallback)
+  const serial = msg_parts.serial_number || '0001';
   const response = this.buildResponse('01', serial);
   if (this.device && this.device.logDebug) {
     this.device.logDebug(`Sending login response (protocol 0x01, serial ${serial})`);
@@ -143,9 +144,11 @@ this.authorize = function (message_serial_number, msg_parts) {
   this.device.send(Buffer.from(response, 'hex'));
 };
 
-// receive_heartbeat renamed to hbt for consistency
-this.hbt = function (message_serial_number, msg_parts) {
-  logger.debug(`hbt called for device: ${this.device.getUID()}`);
+
+// heartbeat response – rename to hbt for consistency (or keep receive_heartbeat)
+// The application calls receive_heartbeat, so we'll keep that name but change signature.
+this.receive_heartbeat = function (message_serial_number, msg_parts) {
+  logger.debug(`receive_heartbeat called for device: ${this.device.getUID()}`);
   const serial = msg_parts.serial_number || '0001';
   const response = this.buildResponse('13', serial);
   if (this.device && this.device.logDebug) {
@@ -154,7 +157,8 @@ this.hbt = function (message_serial_number, msg_parts) {
   this.device.send(Buffer.from(response, 'hex'));
 };
 
-// send_ping_response – called automatically after a location report
+
+// New method for ping (location) responses – automatically called by device.js
 this.send_ping_response = function (msg_parts) {
   logger.debug(`send_ping_response called for device: ${this.device.getUID()}`);
   const serial = msg_parts.serial_number || '0001';
@@ -184,20 +188,17 @@ this.alarm_report = function (message_serial_number, msg_parts) {
   this.device.send(Buffer.from(response, 'hex'));
 };
 
-// Placeholders for other methods to avoid errors
+// Add placeholder methods to avoid "not a function" errors
 this.first_time = function (message_serial_number, msg_parts) {
   logger.debug(`first_time not implemented for GT06`);
 };
-
-
-
 this.register = function (message_serial_number, msg_parts) {
   logger.debug(`register not implemented for GT06`);
 };
-
 this.logout = function (message_serial_number, msg_parts) {
   logger.debug(`logout not implemented for GT06`);
 };
+
 
   this.send_alarm_response = function (msg_parts) {
     logger.debug(`send_alarm_response called for device: ${this.device.getUID()}`);
