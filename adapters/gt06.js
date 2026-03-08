@@ -107,7 +107,9 @@ var adapter = function (device) {
       '2c': { cmd: 'alarm', action: 'alarm' },
       '80': { cmd: 'command_response', action: 'command_response' },
       '81': { cmd: 'command_response', action: 'command_response' },
-      'default': { cmd: 'noop', action: 'noop' }
+      'default': { cmd: 'noop', action: 'noop' },
+      '15': { cmd: 'other', action: 'other' },   // string information
+      '94': { cmd: 'other', action: 'other' },   // ICCID upload
     };
     const mapping = protocolMap[parts['protocol_id']] || protocolMap['default'];
     parts.cmd = mapping.cmd;
@@ -547,9 +549,17 @@ var adapter = function (device) {
     logger.debug(`synchronous_clock called (not implemented)`);
   };
 
-  this.run_other = function (cmd, msg_parts) {
-    logger.debug(`run_other called with cmd: ${cmd}`);
-  };
+this.run_other = function (cmd, msg_parts) {
+  logger.debug(`run_other called with cmd: ${cmd}`);
+  // Send a generic acknowledgment using the same protocol number
+  const serial = msg_parts.serial_number || '0001';
+  const protocol = msg_parts.protocol_id;
+  if (protocol) {
+    const payload = this.buildResponse(protocol, serial);
+    this.device.send(Buffer.from(payload, 'hex'));
+    logger.debug(`Sent generic response for protocol 0x${protocol}`);
+  }
+};
 
   this.request_login_to_device = function () {
     logger.debug(`request_login_to_device called (not implemented)`);
