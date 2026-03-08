@@ -67,16 +67,101 @@ function isTerminalInList(deviceId, list) {
   return list.includes(deviceId);
 }
 
-const deviceProxySockets = new Map();
-
-function cleanupProxySockets(deviceId) {
-  const sockets = deviceProxySockets.get(deviceId);
-  if (sockets) {
-    if (sockets.crs) sockets.crs.destroy();
-    if (sockets.gpspos) sockets.gpspos.destroy();
-    deviceProxySockets.delete(deviceId);
-    logger.debug(`Proxy sockets cleaned up for device ${deviceId}`);
+// ----------------------------------------------------------------------------
+// Robust Proxy Connection Manager (replaces old deviceProxySockets)
+// ----------------------------------------------------------------------------
+class ProxyTarget {
+  constructor(deviceId, targetType, serverType) {
+    this.deviceId = deviceId;
+    this.targetType = targetType; // 'crs' or 'gpspos'
+    this.serverType = serverType; // 'ut04s' or 'gt06'
+    this.socket = null;
+    this.queue = [];
+    this.connecting = false;
+    this.retryTimeout = null;
+    this.host = process.env.CRS_SERVER; // same host for both targets
+    this.port = this._getPort();
   }
+
+  _getPort() {
+    if (this.targetType === 'crs') {
+      return this.serverType === 'ut04s'
+        ? process.env.CRS_SERVER_PORT_UT04S
+        : process.env.CRS_SERVER_PORT_GTO6;
+    } else {
+      return this.serverType === 'ut04s'
+        ? process.env.GPSPOS_SERVER_PORT_UT04S
+        : process.env.GPSPOS_SERVER_PORT_GT06;
+    }
+  }
+
+  connect() {
+    if (this.connecting || (this.socket && !this.socket.destroyed)) return;
+    this.connecting = true;
+    this.socket = new net.Socket();
+    this.socket.connect(this.port, this.host, () => {
+      logger.debug(`${this.targetType} proxy connected for device ${this.deviceId}`);
+      this.connecting = false;
+      // Flush any queued data
+      while (this.queue.length) {
+        const data = this.queue.shift();
+        this.socket.write(data);
+        logger.debug(`${this.targetType} proxy flushed queued data for device ${this.deviceId}`);
+      }
+    });
+    this.socket.on('error', (err) => {
+      logger.error(`${this.targetType} proxy error for device ${this.deviceId}: ${err.message}`);
+      this.socket.destroy();
+      this.socket = null;
+      this.connecting = false;
+      // Schedule reconnect
+      if (this.retryTimeout) clearTimeout(this.retryTimeout);
+      this.retryTimeout = setTimeout(() => {
+        this.retryTimeout = null;
+        this.connect();
+      }, 5000);
+    });
+    this.socket.on('close', () => {
+      logger.debug(`${this.targetType} proxy socket closed for device ${this.deviceId}`);
+      this.socket = null;
+      this.connecting = false;
+    });
+  }
+
+  send(data) {
+    if (this.socket && !this.socket.destroyed) {
+      this.socket.write(data);
+      logger.debug(`${this.targetType} proxy sent data for device ${this.deviceId}`);
+    } else {
+      this.queue.push(data);
+      logger.debug(`${this.targetType} proxy queued data for device ${this.deviceId} (queue length: ${this.queue.length})`);
+      this.connect();
+    }
+  }
+
+  destroy() {
+    if (this.retryTimeout) clearTimeout(this.retryTimeout);
+    if (this.socket) {
+      this.socket.destroy();
+      this.socket = null;
+    }
+    this.queue = [];
+    this.connecting = false;
+  }
+}
+
+const deviceProxyManagers = new Map(); // key: deviceId, value: { crs: ProxyTarget, gpspos: ProxyTarget }
+
+function getProxyManager(deviceId, targetType, serverType) {
+  let managers = deviceProxyManagers.get(deviceId);
+  if (!managers) {
+    managers = {};
+    deviceProxyManagers.set(deviceId, managers);
+  }
+  if (!managers[targetType]) {
+    managers[targetType] = new ProxyTarget(deviceId, targetType, serverType);
+  }
+  return managers[targetType];
 }
 
 function forwardToProxy(deviceId, rawHex, serverType) {
@@ -87,66 +172,32 @@ function forwardToProxy(deviceId, rawHex, serverType) {
   const isGpspos = isTerminalInList(deviceId, lists.gpspos);
   if (!isCrs && !isGpspos) return;
 
-  let sockets = deviceProxySockets.get(deviceId);
-  if (!sockets) {
-    sockets = { crs: null, gpspos: null };
-    deviceProxySockets.set(deviceId, sockets);
-  }
-
   const buffer = Buffer.from(rawHex, 'hex');
 
   if (isCrs) {
-    const crsPort =
-      serverType === 'ut04s'
-        ? process.env.CRS_SERVER_PORT_UT04S
-        : process.env.CRS_SERVER_PORT_GTO6;
-    if (!sockets.crs || sockets.crs.destroyed) {
-      sockets.crs = new net.Socket();
-      sockets.crs.connect(crsPort, process.env.CRS_SERVER, () => {
-        logger.debug(`CRS proxy connected for device ${deviceId}`);
-      });
-      sockets.crs.on('error', (err) => {
-        logger.error(`CRS proxy error for device ${deviceId}: ${err.message}`, {
-          error: err,
-        });
-        if (sockets.crs) sockets.crs.destroy();
-        sockets.crs = null;
-        setTimeout(() => {
-          if (deviceProxySockets.has(deviceId))
-            forwardToProxy(deviceId, rawHex, serverType);
-        }, 5000);
-      });
-    }
-    if (sockets.crs && !sockets.crs.destroyed) sockets.crs.write(buffer);
+    const mgr = getProxyManager(deviceId, 'crs', serverType);
+    mgr.send(buffer);
   }
 
   if (isGpspos) {
-    const gpsposPort =
-      serverType === 'ut04s'
-        ? process.env.GPSPOS_SERVER_PORT_UT04S
-        : process.env.GPSPOS_SERVER_PORT_GT06;
-    if (!sockets.gpspos || sockets.gpspos.destroyed) {
-      sockets.gpspos = new net.Socket();
-      sockets.gpspos.connect(gpsposPort, process.env.GPSPOS_SERVER, () => {
-        logger.debug(`GPSPOS proxy connected for device ${deviceId}`);
-      });
-      sockets.gpspos.on('error', (err) => {
-        logger.error(
-          `GPSPOS proxy error for device ${deviceId}: ${err.message}`,
-          { error: err },
-        );
-        if (sockets.gpspos) sockets.gpspos.destroy();
-        sockets.gpspos = null;
-        setTimeout(() => {
-          if (deviceProxySockets.has(deviceId))
-            forwardToProxy(deviceId, rawHex, serverType);
-        }, 5000);
-      });
-    }
-    if (sockets.gpspos && !sockets.gpspos.destroyed)
-      sockets.gpspos.write(buffer);
+    const mgr = getProxyManager(deviceId, 'gpspos', serverType);
+    mgr.send(buffer);
   }
 }
+
+function cleanupProxyManagers(deviceId) {
+  const managers = deviceProxyManagers.get(deviceId);
+  if (managers) {
+    if (managers.crs) managers.crs.destroy();
+    if (managers.gpspos) managers.gpspos.destroy();
+    deviceProxyManagers.delete(deviceId);
+    logger.debug(`Proxy managers cleaned up for device ${deviceId}`);
+  }
+}
+
+// ============================================================================
+// API Helper
+// ============================================================================
 
 async function sendToAPI(endpoint, data) {
   try {
@@ -190,7 +241,7 @@ function setupDeviceHandlers(device, connection, serverType) {
   device.on('disconnected', () => {
     const devId = device.getUID();
     if (devId) {
-      cleanupProxySockets(devId);
+      cleanupProxyManagers(devId);
       logger.debug(`Device ${devId} disconnected (${serverType})`);
     }
   });
@@ -269,23 +320,34 @@ function setupDeviceHandlers(device, connection, serverType) {
       longitude: data.longitude,
     });
 
-    // Validate that the timestamp from the device is present and valid
-    let timestamp;
+    // Validate timestamp
+    let dateObj;
     if (data.date instanceof Date && !isNaN(data.date.getTime())) {
-      timestamp = data.date.toISOString();
+      dateObj = data.date;
     } else if (typeof data.date === 'string') {
-      const d = new Date(data.date);
-      if (!isNaN(d.getTime())) timestamp = d.toISOString();
-      else timestamp = null;
+      dateObj = new Date(data.date);
+      if (isNaN(dateObj.getTime())) dateObj = null;
     } else {
-      timestamp = null;
+      dateObj = null;
     }
 
-    if (!timestamp) {
+    if (!dateObj) {
       logger.error(
-        `Invalid or missing timestamp for device ${data.device_id}, location not saved.`,
+        `Invalid or missing timestamp for device ${data.device_id}, location not saved.`
       );
       return; // Do not send to API, but device response already sent
+    }
+
+    // ----- FUTURE DATE FILTER (GT06 only) -----
+    if (serverType === 'gt06') {
+      const now = Date.now();
+      const futureTolerance = 60 * 10000; // 1 minute
+      if (dateObj.getTime() > now + futureTolerance) {
+        logger.warn(
+          `Discarding GT06 location from ${data.device_id} because timestamp is in the future: ${dateObj.toISOString()}`
+        );
+        return; // Skip API call
+      }
     }
 
     const payload = {
@@ -297,7 +359,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       altitude: data.height || data.altitude || 0,
       satellites: data.satellites || 0,
       device_status: data.device_status || {},
-      timestamp,
+      timestamp: dateObj.toISOString(),
       raw_data: msg_parts.raw_hex,
       type: 'location',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
@@ -325,20 +387,19 @@ function setupDeviceHandlers(device, connection, serverType) {
     });
 
     // Validate timestamp
-    let timestamp;
+    let dateObj;
     if (alarmData.date instanceof Date && !isNaN(alarmData.date.getTime())) {
-      timestamp = alarmData.date.toISOString();
+      dateObj = alarmData.date;
     } else if (typeof alarmData.date === 'string') {
-      const d = new Date(alarmData.date);
-      if (!isNaN(d.getTime())) timestamp = d.toISOString();
-      else timestamp = null;
+      dateObj = new Date(alarmData.date);
+      if (isNaN(dateObj.getTime())) dateObj = null;
     } else {
-      timestamp = null;
+      dateObj = null;
     }
 
-    if (!timestamp) {
+    if (!dateObj) {
       logger.error(
-        `Invalid or missing timestamp for alarm from device ${alarmData.device_id}, alarm not saved.`,
+        `Invalid or missing timestamp for alarm from device ${alarmData.device_id}, alarm not saved.`
       );
       return;
     }
@@ -352,7 +413,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       speed: alarmData.speed || 0,
       device_status: alarmData.device_status || {},
       raw_data: alarmData.raw_data || msg_parts.raw_hex,
-      timestamp,
+      timestamp: dateObj.toISOString(),
       type: 'alarm',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
       crs_proxy: isTerminalInList(
@@ -375,7 +436,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       altitude: alarmData.height || 0,
       satellites: alarmData.satellites || 0,
       device_status: alarmData.device_status || {},
-      timestamp,
+      timestamp: dateObj.toISOString(),
       raw_data: alarmData.raw_data || msg_parts.raw_hex,
       type: 'location',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
@@ -526,6 +587,13 @@ logger.info('GPS servers started', {
 
 function gracefulShutdown(signal) {
   logger.info(`Received ${signal}, shutting down gracefully...`);
+
+  // Clean up all proxy managers
+  for (const [devId, managers] of deviceProxyManagers.entries()) {
+    if (managers.crs) managers.crs.destroy();
+    if (managers.gpspos) managers.gpspos.destroy();
+  }
+  deviceProxyManagers.clear();
 
   const closeServer = (server) => {
     if (server && typeof server.close === 'function') server.close(() => {});
