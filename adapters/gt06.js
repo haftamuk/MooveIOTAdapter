@@ -11,7 +11,6 @@ var adapter = function (device) {
     return new adapter(device);
   }
 
-  // Two‑byte start marker and two‑byte end marker (as hex strings)
   this.format = {'start': '7878', 'end': '0d0a', 'separator': ''};
   this.device = device;
   this.__count = 1;
@@ -22,7 +21,7 @@ var adapter = function (device) {
   this.parse_data = function (data) {
     try {
       var hexData = this.bufferToHexString(data);
-      logger.debug(`Raw hex data received: ${hexData}`);
+      logger.info(`[GT06] Raw data from ${this.device.getUID() || 'unknown'}: ${hexData}`);
 
       if (hexData.length < 10) {
         logger.debug('Packet too short');
@@ -48,7 +47,7 @@ var adapter = function (device) {
       }
 
       parts['protocol_id'] = hexData.substr(6, 2).toLowerCase();
-      logger.debug(`Protocol ID: ${parts['protocol_id']}`);
+      logger.info(`[GT06] Protocol ID: 0x${parts['protocol_id']}`);
 
       const dataStart = 8;
       parts['data'] = hexData.substring(dataStart, dataStart + (parts['length'] - 1) * 2);
@@ -64,7 +63,7 @@ var adapter = function (device) {
 
       parts.raw_hex = hexData;
 
-      logger.debug(`Parsed: Protocol=${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
+      logger.info(`[GT06] Parsed: Protocol=0x${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
       return parts;
     } catch (error) {
       logger.error('Error parsing data:', error);
@@ -91,6 +90,7 @@ var adapter = function (device) {
       '11': { cmd: 'ping', action: 'ping' },
       '12': { cmd: 'ping', action: 'ping' },
       '13': { cmd: 'heartbeat', action: 'heartbeat' },
+      '15': { cmd: 'other', action: 'other' },          // string information
       '16': { cmd: 'alarm', action: 'alarm' },
       '17': { cmd: 'lbs_location', action: 'lbs_location' },
       '18': { cmd: 'status', action: 'status' },
@@ -107,14 +107,13 @@ var adapter = function (device) {
       '2c': { cmd: 'alarm', action: 'alarm' },
       '80': { cmd: 'command_response', action: 'command_response' },
       '81': { cmd: 'command_response', action: 'command_response' },
-      'default': { cmd: 'noop', action: 'noop' },
-      '15': { cmd: 'other', action: 'other' },   // string information
-      '94': { cmd: 'other', action: 'other' },   // ICCID upload
+      '94': { cmd: 'other', action: 'other' },          // ICCID upload
+      'default': { cmd: 'noop', action: 'noop' }
     };
     const mapping = protocolMap[parts['protocol_id']] || protocolMap['default'];
     parts.cmd = mapping.cmd;
     parts.action = mapping.action;
-    logger.debug(`map_protocol_to_action: protocol=${parts['protocol_id']} -> cmd=${parts.cmd}, action=${parts.action}`);
+    logger.debug(`map_protocol_to_action: protocol=0x${parts['protocol_id']} -> cmd=${parts.cmd}, action=${parts.action}`);
   };
 
   this.bufferToHexString = function (buffer) {
@@ -128,79 +127,59 @@ var adapter = function (device) {
 
   /**
    * Builds the response payload (without start/end markers).
-   * The payload consists of: length (1 byte) + protocol (1 byte) + serial (2 bytes) + CRC (2 bytes).
+   * Payload: length (1 byte) + protocol (1 byte) + serial (2 bytes) + CRC (2 bytes).
    */
   this.buildResponse = function (protocol, serial) {
-    // Payload: length (always 0x05 for these simple responses) + protocol + serial
     const payloadWithoutCRC = '05' + protocol + serial;
     const crc = f.crc16(Buffer.from(payloadWithoutCRC, 'hex'));
-    const fullPayload = payloadWithoutCRC + crc; // 6 bytes total
-    logger.debug(`buildResponse: protocol=${protocol}, serial=${serial}, payload=${fullPayload}`);
+    const fullPayload = payloadWithoutCRC + crc;
+    logger.info(`[GT06] buildResponse: protocol=0x${protocol}, serial=${serial}, payload=${fullPayload}, crc=${crc}`);
     return fullPayload;
   };
 
   // ------------------------------------------------------------------------
-  // Response methods – called from device.js or index.js
+  // Response methods
   // ------------------------------------------------------------------------
 
-  // Called from device.js (login_authorized) with (serial, msg_parts)
   this.authorize = function (message_serial_number, msg_parts) {
-    logger.debug(`authorize called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] authorize called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const payload = this.buildResponse('01', serial);
-    if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending login response (protocol 0x01, serial ${serial})`);
-    }
     this.device.send(Buffer.from(payload, 'hex'));
   };
 
-  // Called from index.js for heartbeat – with ONE argument (msg_parts)
   this.receive_heartbeat = function (msg_parts) {
-    logger.debug(`receive_heartbeat called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] receive_heartbeat called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const payload = this.buildResponse('13', serial);
-    if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending heartbeat response (protocol 0x13, serial ${serial})`);
-    }
     this.device.send(Buffer.from(payload, 'hex'));
   };
 
-  // Automatically called from device.js after a ping (location)
   this.send_ping_response = function (msg_parts) {
-    logger.debug(`send_ping_response called for device: ${this.device.getUID()}`);
-    const serial = msg_parts.serial_number || '0001';
-    const protocol = msg_parts.protocol_id; // e.g., '10', '11', '22'
-    const payload = this.buildResponse(protocol, serial);
-    if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending ping response (protocol 0x${protocol}, serial ${serial})`);
-    }
-    this.device.send(Buffer.from(payload, 'hex'));
-  };
-
-  // Called from device.js (received_location_report) – two arguments
-  this.location_report = function (message_serial_number, msg_parts) {
-    // Delegate to the ping response method (serial not needed separately)
-    this.send_ping_response(msg_parts);
-  };
-
-  // Called from device.js after an alarm – two arguments
-  this.alarm_report = function (message_serial_number, msg_parts) {
-    logger.debug(`alarm_report called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] send_ping_response called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
     const payload = this.buildResponse(protocol, serial);
-    if (this.device && this.device.logDebug) {
-      this.device.logDebug(`Sending alarm response (protocol 0x${protocol}, serial ${serial})`);
-    }
     this.device.send(Buffer.from(payload, 'hex'));
   };
 
-  // Called from index.js for alarm (compatibility) – now delegates to alarm_report
-  this.send_alarm_response = function (msg_parts) {
-    this.alarm_report('0000', msg_parts); // reuse alarm_report with dummy serial
+  this.location_report = function (message_serial_number, msg_parts) {
+    this.send_ping_response(msg_parts);
   };
 
-  // Placeholder methods required by device.js (two arguments)
+  this.alarm_report = function (message_serial_number, msg_parts) {
+    logger.info(`[GT06] alarm_report called for device: ${this.device.getUID()}`);
+    const serial = msg_parts.serial_number || '0001';
+    const protocol = msg_parts.protocol_id;
+    const payload = this.buildResponse(protocol, serial);
+    this.device.send(Buffer.from(payload, 'hex'));
+  };
+
+  this.send_alarm_response = function (msg_parts) {
+    this.alarm_report('0000', msg_parts);
+  };
+
+  // Placeholder methods
   this.first_time = function (message_serial_number, msg_parts) {
     logger.debug(`first_time not implemented for GT06`);
   };
@@ -325,7 +304,7 @@ var adapter = function (device) {
 
   this.parse_compact_gps_data = function (str, msg_parts) {
     logger.debug(`parse_compact_gps_data: data=${str}`);
-    const date = new Date(); // fallback to current time
+    const date = new Date(); // fallback
     let latitude = 0;
     let longitude = 0;
     let speed = 0;
@@ -367,7 +346,7 @@ var adapter = function (device) {
   };
 
   /*******************************************
-   COMPREHENSIVE ALARM PARSING FOR ALL GT06 VARIANTS
+   COMPREHENSIVE ALARM PARSING
    *******************************************/
   this.receive_alarm = function (msg_parts) {
     logger.debug(`receive_alarm called for device: ${this.device.getUID()}`);
@@ -549,17 +528,22 @@ var adapter = function (device) {
     logger.debug(`synchronous_clock called (not implemented)`);
   };
 
-this.run_other = function (cmd, msg_parts) {
-  logger.debug(`run_other called with cmd: ${cmd}`);
-  // Send a generic acknowledgment using the same protocol number
-  const serial = msg_parts.serial_number || '0001';
-  const protocol = msg_parts.protocol_id;
-  if (protocol) {
-    const payload = this.buildResponse(protocol, serial);
-    this.device.send(Buffer.from(payload, 'hex'));
-    logger.debug(`Sent generic response for protocol 0x${protocol}`);
-  }
-};
+  /**
+   * run_other – handles any protocol not explicitly mapped.
+   * Sends a generic acknowledgment to keep the connection alive.
+   */
+  this.run_other = function (cmd, msg_parts) {
+    logger.info(`[GT06] run_other called with cmd: ${cmd}, protocol: 0x${msg_parts.protocol_id}`);
+    const serial = msg_parts.serial_number || '0001';
+    const protocol = msg_parts.protocol_id;
+    if (protocol) {
+      const payload = this.buildResponse(protocol, serial);
+      this.device.send(Buffer.from(payload, 'hex'));
+      logger.info(`[GT06] Sent generic response for protocol 0x${protocol}`);
+    } else {
+      logger.warn(`[GT06] No protocol_id in msg_parts, cannot respond`);
+    }
+  };
 
   this.request_login_to_device = function () {
     logger.debug(`request_login_to_device called (not implemented)`);
