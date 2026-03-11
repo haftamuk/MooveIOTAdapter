@@ -73,19 +73,39 @@ function isTerminalInList(deviceId, list) {
 }
 
 // ============================================================================
-// Robust Proxy Connection Manager
+// Robust Proxy Connection Manager with File Logging
 // ============================================================================
 
 class ProxyTarget {
-  constructor(deviceId, host, port) {
+  constructor(deviceId, host, port, targetType) {
     this.deviceId = deviceId;
     this.host = host;
     this.port = port;
+    this.targetType = targetType; // 'crs' or 'gpspos'
     this.socket = null;
     this.queue = [];
     this.connecting = false;
     this.retryTimeout = null;
     this.retryCount = 0;
+    this.logStream = null;
+    this.openLogFile();
+  }
+
+  openLogFile() {
+    const logDir = path.join(__dirname, 'proxy_logs');
+    if (!fs.existsSync(logDir)) {
+      fs.mkdirSync(logDir, { recursive: true });
+    }
+    const logFile = path.join(logDir, `proxy_${this.deviceId}_${this.targetType}.log`);
+    this.logStream = fs.createWriteStream(logFile, { flags: 'a' });
+    this.log(`Log file opened for ${this.targetType} proxy target ${this.host}:${this.port}`);
+  }
+
+  log(message) {
+    if (this.logStream) {
+      const timestamp = new Date().toISOString();
+      this.logStream.write(`[${timestamp}] ${message}\n`);
+    }
   }
 
   connect() {
@@ -97,6 +117,7 @@ class ProxyTarget {
       proxyLogger.info(
         `Proxy connected for device ${this.deviceId} to ${this.host}:${this.port}`
       );
+      this.log(`Connected to ${this.host}:${this.port} (attempt ${this.retryCount})`);
       this.connecting = false;
       this.retryCount = 0; // reset on successful connection
 
@@ -104,16 +125,23 @@ class ProxyTarget {
       while (this.queue.length) {
         const data = this.queue.shift();
         this.socket.write(data);
+        this.log(`Flushed queued data (${data.length} bytes): ${data.toString('hex')}`);
         proxyLogger.debug(
           `Flushed queued data for device ${this.deviceId} to ${this.host}:${this.port}, queue length now ${this.queue.length}`
         );
       }
     });
 
+    this.socket.on('data', (data) => {
+      this.log(`Received ${data.length} bytes: ${data.toString('hex')}`);
+      // You can handle responses here if needed, e.g., forward back to device
+    });
+
     this.socket.on('error', (err) => {
       proxyLogger.error(
         `Proxy socket error for device ${this.deviceId} to ${this.host}:${this.port}: ${err.message}`
       );
+      this.log(`Socket error: ${err.message}`);
       this.socket.destroy();
       this.socket = null;
       this.connecting = false;
@@ -124,6 +152,7 @@ class ProxyTarget {
       proxyLogger.debug(
         `Proxy socket closed for device ${this.deviceId} to ${this.host}:${this.port}`
       );
+      this.log('Connection closed');
       this.socket = null;
       this.connecting = false;
 
@@ -132,6 +161,7 @@ class ProxyTarget {
         proxyLogger.debug(
           `Queue not empty after close for device ${this.deviceId}, scheduling reconnect`
         );
+        this.log(`Queue not empty (${this.queue.length} items), scheduling reconnect`);
         this.scheduleReconnect();
       }
     });
@@ -147,6 +177,7 @@ class ProxyTarget {
     proxyLogger.debug(
       `Scheduling reconnect for device ${this.deviceId} to ${this.host}:${this.port} in ${delay}ms (attempt ${this.retryCount})`
     );
+    this.log(`Scheduling reconnect in ${delay}ms (attempt ${this.retryCount})`);
 
     this.retryTimeout = setTimeout(() => {
       this.retryTimeout = null;
@@ -157,11 +188,13 @@ class ProxyTarget {
   send(data) {
     if (this.socket && !this.socket.destroyed) {
       this.socket.write(data);
+      this.log(`Sent ${data.length} bytes: ${data.toString('hex')}`);
       proxyLogger.debug(
         `Sent data to ${this.host}:${this.port} for device ${this.deviceId}`
       );
     } else {
       this.queue.push(data);
+      this.log(`Queued ${data.length} bytes (queue length: ${this.queue.length}): ${data.toString('hex')}`);
       proxyLogger.debug(
         `Queued data for device ${this.deviceId} to ${this.host}:${this.port}, queue length: ${this.queue.length}`
       );
@@ -183,6 +216,11 @@ class ProxyTarget {
     }
     this.queue = [];
     this.connecting = false;
+    if (this.logStream) {
+      this.log('Proxy target destroyed');
+      this.logStream.end();
+      this.logStream = null;
+    }
     proxyLogger.debug(
       `Proxy target destroyed for device ${this.deviceId} to ${this.host}:${this.port}`
     );
@@ -226,7 +264,7 @@ function getProxyManager(deviceId, targetType, serverType) {
       return null; // Skip this proxy
     }
 
-    managers[targetType] = new ProxyTarget(deviceId, host, port);
+    managers[targetType] = new ProxyTarget(deviceId, host, port, targetType);
     proxyLogger.info(
       `Created proxy manager for device ${deviceId}, target=${targetType}, serverType=${serverType} -> ${host}:${port}`
     );

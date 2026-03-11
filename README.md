@@ -1,5 +1,40 @@
 Here's a section you can add to your `README.md` to document the new protocol debugging feature:
 
+markdown
+## Proxy-Level Debugging
+
+For devices listed in `terminalLists` (i.e., those that forward data to external CRS or GPSPOS servers), the server now writes detailed proxy logs. These logs help diagnose why a device may not be reaching the external servers.
+
+### Log Location and Format
+
+- **Directory:** `proxy_logs/` (created automatically)
+- **Naming:** `proxy_<deviceId>_crs.log` and `proxy_<deviceId>_gpspos.log`
+- **Each line** contains an ISO timestamp and a descriptive message:
+  - Connection attempts, successes, failures, and reconnections
+  - Data sent to the external server (hex preview)
+  - Data received from the external server (if any)
+  - Queue events when the socket is not yet connected
+
+### Example Snippet
+[2025-03-11T14:23:45.123Z] Log file opened for crs proxy target 192.168.1.100:9001
+[2025-03-11T14:23:45.456Z] Connected to 192.168.1.100:9001 (attempt 0)
+[2025-03-11T14:23:45.789Z] Sent 42 bytes: 7e0200002a123456789012345000100000000001020304...
+[2025-03-11T14:23:46.012Z] Received 10 bytes: 7e80010005123456789012345000017e
+[2025-03-11T14:24:00.123Z] Socket error: ECONNRESET
+[2025-03-11T14:24:00.124Z] Scheduling reconnect in 2000ms (attempt 1)
+
+text
+
+### Using the Logs
+
+- If the external server never receives data, check whether a connection was ever established (`Connected to ...`).
+- If connections are repeatedly failing, look for `Socket error` lines – they may indicate network issues, wrong host/port, or firewall blocks.
+- If data is sent but no response is seen (`Received` lines), the external server may be ignoring the messages or not sending acknowledgements – this is normal for some setups.
+- Queue events indicate that data arrived before the socket was ready; if the queue never drains, the connection may be permanently down.
+
+These logs are **only written for devices that are actually proxied** (i.e., appear in `crs` or `gpspos` lists), so there is no performance impact on other devices.
+
+
 ---
 
 ## Protocol-Level Debugging
