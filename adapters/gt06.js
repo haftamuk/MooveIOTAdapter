@@ -21,7 +21,7 @@ var adapter = function (device) {
   this.parse_data = function (data) {
     try {
       var hexData = this.bufferToHexString(data);
-      logger.warn(`[GT06] Raw data from ${this.device.getUID() || 'unknown'}: ${hexData}`);
+      logger.info(`[GT06] Raw data from ${this.device.getUID() || 'unknown'}: ${hexData}`);
 
       if (hexData.length < 10) {
         logger.debug('Packet too short');
@@ -47,7 +47,7 @@ var adapter = function (device) {
       }
 
       parts['protocol_id'] = hexData.substr(6, 2).toLowerCase();
-      logger.warn(`[GT06] Protocol ID: 0x${parts['protocol_id']}`);
+      logger.info(`[GT06] Protocol ID: 0x${parts['protocol_id']}`);
 
       const dataStart = 8;
       parts['data'] = hexData.substring(dataStart, dataStart + (parts['length'] - 1) * 2);
@@ -63,7 +63,7 @@ var adapter = function (device) {
 
       parts.raw_hex = hexData;
 
-      logger.warn(`[GT06] Parsed: Protocol=0x${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
+      logger.info(`[GT06] Parsed: Protocol=0x${parts['protocol_id']}, Action=${parts.action}, DataLen=${parts['data'].length}`);
       return parts;
     } catch (error) {
       logger.error('Error parsing data:', error);
@@ -133,7 +133,7 @@ var adapter = function (device) {
     const payloadWithoutCRC = '05' + protocol + serial;
     const crc = f.crc16(Buffer.from(payloadWithoutCRC, 'hex'));
     const fullPayload = payloadWithoutCRC + crc;
-    logger.warn(`[GT06] buildResponse: protocol=0x${protocol}, serial=${serial}, payload=${fullPayload}, crc=${crc}`);
+    logger.info(`[GT06] buildResponse: protocol=0x${protocol}, serial=${serial}, payload=${fullPayload}, crc=${crc}`);
     return fullPayload;
   };
 
@@ -142,21 +142,21 @@ var adapter = function (device) {
   // ------------------------------------------------------------------------
 
   this.authorize = function (message_serial_number, msg_parts) {
-    logger.warn(`[GT06] authorize called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] authorize called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const payload = this.buildResponse('01', serial);
     this.device.send(Buffer.from(payload, 'hex'));
   };
 
   this.receive_heartbeat = function (msg_parts) {
-    logger.warn(`[GT06] receive_heartbeat called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] receive_heartbeat called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const payload = this.buildResponse('13', serial);
     this.device.send(Buffer.from(payload, 'hex'));
   };
 
   this.send_ping_response = function (msg_parts) {
-    logger.warn(`[GT06] send_ping_response called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] send_ping_response called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
     const payload = this.buildResponse(protocol, serial);
@@ -168,7 +168,7 @@ var adapter = function (device) {
   };
 
   this.alarm_report = function (message_serial_number, msg_parts) {
-    logger.warn(`[GT06] alarm_report called for device: ${this.device.getUID()}`);
+    logger.info(`[GT06] alarm_report called for device: ${this.device.getUID()}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
     const payload = this.buildResponse(protocol, serial);
@@ -533,13 +533,13 @@ var adapter = function (device) {
    * Sends a generic acknowledgment to keep the connection alive.
    */
   this.run_other = function (cmd, msg_parts) {
-    logger.warn(`[GT06] run_other called with cmd: ${cmd}, protocol: 0x${msg_parts.protocol_id}`);
+    logger.info(`[GT06] run_other called with cmd: ${cmd}, protocol: 0x${msg_parts.protocol_id}`);
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
     if (protocol) {
       const payload = this.buildResponse(protocol, serial);
       this.device.send(Buffer.from(payload, 'hex'));
-      logger.warn(`[GT06] Sent generic response for protocol 0x${protocol}`);
+      logger.info(`[GT06] Sent generic response for protocol 0x${protocol}`);
     } else {
       logger.warn(`[GT06] No protocol_id in msg_parts, cannot respond`);
     }
