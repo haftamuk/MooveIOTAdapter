@@ -340,7 +340,7 @@ const baseServerOptions = {
 };
 
 // ============================================================================
-// Shared Event Handler (unchanged except for proxy forwarding)
+// Shared Event Handler (updated to use raw_hex_full for proxy)
 // ============================================================================
 
 function setupDeviceHandlers(device, connection, serverType) {
@@ -360,12 +360,12 @@ function setupDeviceHandlers(device, connection, serverType) {
       device_id,
       msg_parts,
     });
-    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
   });
 
   device.on('register', (device_id, msg_parts) => {
     device.new_device_register(msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.info(`Device registered: ${device_id}`, { device_id });
 
     const reg = msg_parts.parsed_register || {};
@@ -383,7 +383,7 @@ function setupDeviceHandlers(device, connection, serverType) {
 
   device.on('login_request', (device_id, msg_parts) => {
     device.login_authorized(true, msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.info(`Login request from ${device_id}`, { device_id });
 
     const auth = msg_parts.parsed_auth || {};
@@ -403,7 +403,7 @@ function setupDeviceHandlers(device, connection, serverType) {
     if (serverType === 'ut04s') device.receive_hbt(msg_parts);
     else device.adapter.receive_heartbeat(msg_parts);
 
-    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.debug(`Heartbeat from ${device_id}`, { device_id });
     sendToAPI(API_ENDPOINTS.HEARTBEAT, {
       device_id,
@@ -416,13 +416,13 @@ function setupDeviceHandlers(device, connection, serverType) {
 
   device.on('logout', (device_id, msg_parts) => {
     device.logout(msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.info(`Device logout: ${device_id}`, { device_id });
   });
 
   device.on('ping', (data, msg_parts) => {
     if (serverType === 'ut04s') device.received_location_report(msg_parts);
-    forwardToProxy(data.device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(data.device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.debug(`Location from ${data.device_id}`, {
       device_id: data.device_id,
       latitude: data.latitude,
@@ -488,7 +488,7 @@ function setupDeviceHandlers(device, connection, serverType) {
     if (serverType === 'ut04s') device.received_alarm_report(msg_parts);
     else device.adapter.send_alarm_response(msg_parts);
 
-    forwardToProxy(alarmData.device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(alarmData.device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.warn(`Alarm from ${alarmData.device_id}: ${alarmData.alarm_type}`, {
       alarmData,
     });
@@ -558,7 +558,7 @@ function setupDeviceHandlers(device, connection, serverType) {
 
   device.on('other', (device_id, msg_parts) => {
     device.adapter.run_other(msg_parts.cmd, msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex, serverType);
+    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
 
     if (
       serverType === 'ut04s' &&
