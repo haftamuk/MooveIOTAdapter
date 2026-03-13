@@ -510,8 +510,11 @@ function setupDeviceHandlers(device, connection, serverType) {
       return;
     }
 
+    // ========== FIX: Ensure device_id is always present ==========
+    const safeDeviceId = device.getUID(); // guaranteed to be the correct device ID
+
     const alarmPayload = {
-      device_id: alarmData.device_id,
+      device_id: safeDeviceId,                     // was alarmData.device_id
       alarm_type: alarmData.alarm_type,
       alarm_code: alarmData.alarm_code,
       latitude: alarmData.latitude,
@@ -523,7 +526,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       type: 'alarm',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
       crs_proxy: isTerminalInList(
-        alarmData.device_id,
+        safeDeviceId,                              // was alarmData.device_id
         terminalLists[serverType].crs
       ),
     };
@@ -533,7 +536,7 @@ function setupDeviceHandlers(device, connection, serverType) {
     sendToAPI(API_ENDPOINTS.ALARM, alarmPayload).catch(() => {});
 
     const locPayload = {
-      device_id: alarmData.device_id,
+      device_id: safeDeviceId,                     // was alarmData.device_id
       latitude: alarmData.latitude,
       longitude: alarmData.longitude,
       speed: alarmData.speed || 0,
@@ -546,7 +549,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       type: 'location',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
       crs_proxy: isTerminalInList(
-        alarmData.device_id,
+        safeDeviceId,                              // was alarmData.device_id
         terminalLists[serverType].crs
       ),
     };
