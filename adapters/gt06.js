@@ -478,6 +478,11 @@ var adapter = function (device) {
       '20': 'External Power Disconnected',
       '21': 'External Power Connected',
       '22': 'GPS Jamming Detection',
+      // Custom codes observed from TK003 and UM552 devices
+      '44': 'ACC Off',
+      '46': 'Vibration Alarm',
+      '4D': 'Speeding Alarm',
+      '4E': 'ACC On',
       'FF': 'System Notification 15'
     };
 
