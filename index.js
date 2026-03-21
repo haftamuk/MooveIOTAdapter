@@ -546,7 +546,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       device_status: alarmData.device_status || {},
       timestamp: dateObj.toISOString(),
       raw_data: alarmData.raw_data || msg_parts.raw_hex,
-      type: 'location',
+      type: 'AlarmLocation',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
       crs_proxy: isTerminalInList(
         safeDeviceId,                              // was alarmData.device_id
@@ -579,7 +579,7 @@ function setupDeviceHandlers(device, connection, serverType) {
           satellites: loc.additional_info.satellites || 0,
           timestamp: loc.timestamp.toISOString(),
           raw_data: loc.raw_data || '',
-          type: 'location',
+          type: 'BatchLocation',
           protocol: 'JT808',
           batch_upload: true,
           crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
