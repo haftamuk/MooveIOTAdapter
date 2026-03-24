@@ -9,6 +9,7 @@ require('dotenv').config({ path: path.resolve(__dirname, envFile) });
 
 const logger = require('./lib/logger');
 const gps = require('./lib/server');
+const { isDeviceInList } = require('./lib/deviceConfig');
 
 // ============================================================================
 // Proxy-specific logger (child of main logger)
@@ -29,55 +30,12 @@ const API_ENDPOINTS = {
   LOGIN: `${MOOVE_SERVER_BASE_URL}/api/gps/login`,
 };
 
-const terminalLists = {
-  ut04s: {
-    crs: ['020201232938', '020201228393'],
-    gpspos: [
-      '020201232938',
-      '020201228393',
-      '020201292186',
-      '020201228351',
-      '020201205789',
-      '020201223132',
-      '020201294976',
-      '020201206555',
-      '020201291753',
-      '020201263620',
-    ],
-  },
-  gt06: {
-    crs: [
-      '0868720063451946',
-      '0868720063452100',
-      '0868720062933829',
-      '0864943047255027',
-      '0358657103600172',
-      '0358657103608399',
-      '0358657103600453',
-      '0358657105060953',
-      '0358657104462051',
-      '0868720061903625',
-      '0868720061906289',
-      '0868720061905174',
-      '0868720061898619',
-      '0358657104517136',
-      '0358657103861956',
-      '0358657104813964',
-    ],
-    gpspos: ['0868720063451946', '0358657104813964', '0864943048638536'],
-  },
-};
-
-function isTerminalInList(deviceId, list) {
-  return list.includes(deviceId);
-}
-
 // ============================================================================
 // Robust Proxy Connection Manager with File Logging
 // ============================================================================
 
 class ProxyTarget {
-  constructor(deviceId, host, port, targetType) {
+  constructor(deviceId, host, port, targetType, debugStream = null) {
     this.deviceId = deviceId;
     this.host = host;
     this.port = port;
@@ -87,8 +45,10 @@ class ProxyTarget {
     this.connecting = false;
     this.retryTimeout = null;
     this.retryCount = 0;
-    this.logStream = null;
-    this.openLogFile();
+    this.debugStream = debugStream; // external stream (from device)
+    if (!this.debugStream) {
+      this.openLogFile();
+    }
   }
 
   openLogFile() {
@@ -102,9 +62,12 @@ class ProxyTarget {
   }
 
   log(message) {
-    if (this.logStream) {
-      const timestamp = new Date().toISOString();
-      this.logStream.write(`[${timestamp}] ${message}\n`);
+    const timestamp = new Date().toISOString();
+    const formatted = `[${timestamp}] ${message}`;
+    if (this.debugStream) {
+      this.debugStream.write(formatted + '\n');
+    } else if (this.logStream) {
+      this.logStream.write(formatted + '\n');
     }
   }
 
@@ -230,7 +193,10 @@ class ProxyTarget {
 // Map: deviceId -> { crs: ProxyTarget, gpspos: ProxyTarget }
 const deviceProxyManagers = new Map();
 
-function getProxyManager(deviceId, targetType, serverType) {
+function getProxyManager(device, targetType, serverType) {
+  const deviceId = device.getUID();
+  if (!deviceId) return null;
+
   let managers = deviceProxyManagers.get(deviceId);
   if (!managers) {
     managers = {};
@@ -264,7 +230,8 @@ function getProxyManager(deviceId, targetType, serverType) {
       return null; // Skip this proxy
     }
 
-    managers[targetType] = new ProxyTarget(deviceId, host, port, targetType);
+    const debugStream = device.getDebugStream(); // may be null
+    managers[targetType] = new ProxyTarget(deviceId, host, port, targetType, debugStream);
     proxyLogger.info(
       `Created proxy manager for device ${deviceId}, target=${targetType}, serverType=${serverType} -> ${host}:${port}`
     );
@@ -273,23 +240,23 @@ function getProxyManager(deviceId, targetType, serverType) {
   return managers[targetType];
 }
 
-function forwardToProxy(deviceId, rawHex, serverType) {
-  const lists = terminalLists[serverType];
-  if (!lists) return;
+function forwardToProxy(device, rawHex, serverType) {
+  const deviceId = device.getUID();
+  if (!deviceId) return;
 
-  const isCrs = isTerminalInList(deviceId, lists.crs);
-  const isGpspos = isTerminalInList(deviceId, lists.gpspos);
+  const isCrs = isDeviceInList(serverType, deviceId, 'crs');
+  const isGpspos = isDeviceInList(serverType, deviceId, 'gpspos');
   if (!isCrs && !isGpspos) return;
 
   const buffer = Buffer.from(rawHex, 'hex');
 
   if (isCrs) {
-    const mgr = getProxyManager(deviceId, 'crs', serverType);
+    const mgr = getProxyManager(device, 'crs', serverType);
     if (mgr) mgr.send(buffer);
   }
 
   if (isGpspos) {
-    const mgr = getProxyManager(deviceId, 'gpspos', serverType);
+    const mgr = getProxyManager(device, 'gpspos', serverType);
     if (mgr) mgr.send(buffer);
   }
 }
@@ -360,12 +327,12 @@ function setupDeviceHandlers(device, connection, serverType) {
       device_id,
       msg_parts,
     });
-    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
   });
 
   device.on('register', (device_id, msg_parts) => {
     device.new_device_register(msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.info(`Device registered: ${device_id}`, { device_id });
 
     const reg = msg_parts.parsed_register || {};
@@ -375,7 +342,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       protocol_version: 'JT808',
       ip_address: connection.remoteAddress,
       timestamp: new Date().toISOString(),
-      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
+      crs_proxy: isDeviceInList(serverType, device_id, 'crs'),
       terminal_info: reg,
       raw_preview: msg_parts.raw_hex ? msg_parts.raw_hex.substring(0, 50) : '',
     }).catch(() => {});
@@ -383,7 +350,7 @@ function setupDeviceHandlers(device, connection, serverType) {
 
   device.on('login_request', (device_id, msg_parts) => {
     device.login_authorized(true, msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.info(`Login request from ${device_id}`, { device_id });
 
     const auth = msg_parts.parsed_auth || {};
@@ -393,7 +360,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       protocol_version: serverType === 'ut04s' ? 'JT808' : 'GT06+',
       ip_address: connection.remoteAddress,
       timestamp: new Date().toISOString(),
-      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
+      crs_proxy: isDeviceInList(serverType, device_id, 'crs'),
       auth_code: auth.authCode || '',
       raw_preview: msg_parts.raw_hex ? msg_parts.raw_hex.substring(0, 50) : '',
     }).catch(() => {});
@@ -403,26 +370,26 @@ function setupDeviceHandlers(device, connection, serverType) {
     if (serverType === 'ut04s') device.receive_hbt(msg_parts);
     else device.adapter.receive_heartbeat(msg_parts);
 
-    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.debug(`Heartbeat from ${device_id}`, { device_id });
     sendToAPI(API_ENDPOINTS.HEARTBEAT, {
       device_id,
       online: true,
       timestamp: new Date().toISOString(),
       type: 'heartbeat',
-      crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
+      crs_proxy: isDeviceInList(serverType, device_id, 'crs'),
     }).catch(() => {});
   });
 
   device.on('logout', (device_id, msg_parts) => {
     device.logout(msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.info(`Device logout: ${device_id}`, { device_id });
   });
 
   device.on('ping', (data, msg_parts) => {
     if (serverType === 'ut04s') device.received_location_report(msg_parts);
-    forwardToProxy(data.device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.debug(`Location from ${data.device_id}`, {
       device_id: data.device_id,
       latitude: data.latitude,
@@ -471,10 +438,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       raw_data: msg_parts.raw_hex,
       type: 'location',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isTerminalInList(
-        data.device_id,
-        terminalLists[serverType].crs
-      ),
+      crs_proxy: isDeviceInList(serverType, data.device_id, 'crs'),
     };
 
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
@@ -488,7 +452,7 @@ function setupDeviceHandlers(device, connection, serverType) {
     if (serverType === 'ut04s') device.received_alarm_report(msg_parts);
     else device.adapter.send_alarm_response(msg_parts);
 
-    forwardToProxy(alarmData.device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
     logger.warn(`Alarm from ${alarmData.device_id}: ${alarmData.alarm_type}`, {
       alarmData,
     });
@@ -525,10 +489,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       timestamp: dateObj.toISOString(),
       type: 'alarm',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isTerminalInList(
-        safeDeviceId,                              // was alarmData.device_id
-        terminalLists[serverType].crs
-      ),
+      crs_proxy: isDeviceInList(serverType, safeDeviceId, 'crs'),
     };
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
       alarmPayload.protocol_id = msg_parts.protocol_id;
@@ -548,10 +509,7 @@ function setupDeviceHandlers(device, connection, serverType) {
       raw_data: alarmData.raw_data || msg_parts.raw_hex,
       type: 'AlarmLocation',
       protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isTerminalInList(
-        safeDeviceId,                              // was alarmData.device_id
-        terminalLists[serverType].crs
-      ),
+      crs_proxy: isDeviceInList(serverType, safeDeviceId, 'crs'),
     };
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
       locPayload.protocol_id = msg_parts.protocol_id;
@@ -561,7 +519,7 @@ function setupDeviceHandlers(device, connection, serverType) {
 
   device.on('other', (device_id, msg_parts) => {
     device.adapter.run_other(msg_parts.cmd, msg_parts);
-    forwardToProxy(device_id, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
+    forwardToProxy(device, msg_parts.raw_hex_full || msg_parts.raw_hex, serverType);
 
     if (
       serverType === 'ut04s' &&
@@ -582,7 +540,7 @@ function setupDeviceHandlers(device, connection, serverType) {
           type: 'BatchLocation',
           protocol: 'JT808',
           batch_upload: true,
-          crs_proxy: isTerminalInList(device_id, terminalLists[serverType].crs),
+          crs_proxy: isDeviceInList(serverType, device_id, 'crs'),
         }).catch(() => {});
       }
     } else if (
