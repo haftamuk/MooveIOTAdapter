@@ -307,6 +307,46 @@ const baseServerOptions = {
 };
 
 // ============================================================================
+// Helper: Build Location Payload with all available data
+// ============================================================================
+function buildLocationPayload(deviceId, data, msg_parts, serverType, type = 'location') {
+  const base = {
+    device_id: deviceId,
+    type: type,
+    timestamp: (data.date && data.date instanceof Date ? data.date.toISOString() : new Date().toISOString()),
+    timestampDate: data.date instanceof Date ? data.date : new Date(),
+    latitude: data.latitude,
+    longitude: data.longitude,
+    speed: data.speed || 0,
+    course: data.orientation || data.direction || 0,
+    altitude: data.height || data.altitude || 0,
+    satellites: data.satellites || 0,
+    device_status: data.device_status || {},
+    raw_data: msg_parts.raw_hex || data.raw_data || '',
+    protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
+    crs_proxy: isDeviceInList(serverType, deviceId, 'crs'),
+  };
+
+  // For JT808, add additional_info from parsed_location
+  if (serverType === 'ut04s' && msg_parts.parsed_location && msg_parts.parsed_location.additional_info) {
+    base.additional_info = msg_parts.parsed_location.additional_info;
+  }
+
+  // For GT06, add protocol_id if present
+  if (serverType === 'gt06' && msg_parts.protocol_id) {
+    base.protocol_id = msg_parts.protocol_id;
+  }
+
+  // If there is any raw_data_body in msg_parts, include it for completeness
+  if (msg_parts.data_body) {
+    base.additional_info = base.additional_info || {};
+    base.additional_info.data_body = msg_parts.data_body;
+  }
+
+  return base;
+}
+
+// ============================================================================
 // Shared Event Handler (updated to use raw_hex_full for proxy)
 // ============================================================================
 
@@ -425,26 +465,8 @@ function setupDeviceHandlers(device, connection, serverType) {
       }
     }
 
-    const payload = {
-      device_id: data.device_id,
-      latitude: data.latitude,
-      longitude: data.longitude,
-      speed: data.speed || 0,
-      course: data.orientation || data.direction || 0,
-      altitude: data.height || data.altitude || 0,
-      satellites: data.satellites || 0,
-      device_status: data.device_status || {},
-      timestamp: dateObj.toISOString(),
-      raw_data: msg_parts.raw_hex,
-      type: 'location',
-      protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isDeviceInList(serverType, data.device_id, 'crs'),
-    };
-
-    if (serverType !== 'ut04s' && msg_parts.protocol_id) {
-      payload.protocol_id = msg_parts.protocol_id;
-    }
-
+    // Build payload using helper
+    const payload = buildLocationPayload(data.device_id, data, msg_parts, serverType, 'location');
     sendToAPI(API_ENDPOINTS.LOCATION, payload).catch(() => {});
   });
 
@@ -474,11 +496,10 @@ function setupDeviceHandlers(device, connection, serverType) {
       return;
     }
 
-    // ========== FIX: Ensure device_id is always present ==========
     const safeDeviceId = device.getUID(); // guaranteed to be the correct device ID
 
     const alarmPayload = {
-      device_id: safeDeviceId,                     // was alarmData.device_id
+      device_id: safeDeviceId,
       alarm_type: alarmData.alarm_type,
       alarm_code: alarmData.alarm_code,
       latitude: alarmData.latitude,
@@ -494,26 +515,13 @@ function setupDeviceHandlers(device, connection, serverType) {
     if (serverType !== 'ut04s' && msg_parts.protocol_id) {
       alarmPayload.protocol_id = msg_parts.protocol_id;
     }
+    // Add additional_info if available
+    if (serverType === 'ut04s' && msg_parts.parsed_location && msg_parts.parsed_location.additional_info) {
+      alarmPayload.additional_info = msg_parts.parsed_location.additional_info;
+    }
     sendToAPI(API_ENDPOINTS.ALARM, alarmPayload).catch(() => {});
 
-    const locPayload = {
-      device_id: safeDeviceId,                     // was alarmData.device_id
-      latitude: alarmData.latitude,
-      longitude: alarmData.longitude,
-      speed: alarmData.speed || 0,
-      course: alarmData.orientation || 0,
-      altitude: alarmData.height || 0,
-      satellites: alarmData.satellites || 0,
-      device_status: alarmData.device_status || {},
-      timestamp: dateObj.toISOString(),
-      raw_data: alarmData.raw_data || msg_parts.raw_hex,
-      type: 'AlarmLocation',
-      protocol: serverType === 'ut04s' ? 'JT808' : 'GT06N',
-      crs_proxy: isDeviceInList(serverType, safeDeviceId, 'crs'),
-    };
-    if (serverType !== 'ut04s' && msg_parts.protocol_id) {
-      locPayload.protocol_id = msg_parts.protocol_id;
-    }
+    const locPayload = buildLocationPayload(safeDeviceId, alarmData, msg_parts, serverType, 'AlarmLocation');
     sendToAPI(API_ENDPOINTS.LOCATION, locPayload).catch(() => {});
   });
 
