@@ -97,20 +97,26 @@ class ProxyTarget {
       }
     });
 
-    this.socket.on('data', (data) => {
-      proxyLogger.debug(`Command Interpretation: Received ${data.length} bytes: ${data.toString('hex')}`);
-      this.log(`Received ${data.length} bytes: ${data.toString('hex')}`);
+this.socket.on('data', (data) => {
+  this.log(`Received ${data.length} bytes: ${data.toString('hex')}`);
 
-      // For UT04S devices, attempt to parse and interpret the JT808 command
-      if (this.serverType === 'ut04s') {
-        const parsed = jt808Parser.parseJT808Packet(data);
-        if (parsed && parsed.interpretation) {
-          this.log(`Command Interpretation: ${parsed.interpretation}`);
-        } else if (parsed === null) {
-          this.log('(Could not parse as JT808 packet)');
-        }
+  // For UT04S devices, attempt to parse and interpret the JT808 packet
+  if (this.serverType === 'ut04s') {
+    const parsed = jt808Parser.parseJT808Packet(data);
+    if (parsed && parsed.interpretation) {
+      const { type, commandName } = parsed.classification;
+      if (type === 'command') {
+        // This is a server‑initiated command – log full interpretation
+        this.log(`Command from server (${commandName}): ${parsed.interpretation}`);
+      } else {
+        // This is a response to a device message – log briefly
+        this.log(`Response from server (${commandName}) – raw hex: ${data.toString('hex')}`);
       }
-    });
+    } else if (parsed === null) {
+      this.log('(Could not parse as JT808 packet)');
+    }
+  }
+});
 
     this.socket.on('error', (err) => {
       proxyLogger.error(
