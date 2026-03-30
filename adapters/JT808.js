@@ -420,7 +420,29 @@ const adapter = function (device) {
             case '31': additionalInfo.satellites = parseInt(infoVal, 16); break;
             case '38': additionalInfo.battery_percentage = parseInt(infoVal, 16); break;
             case '2a': additionalInfo.io_status = parseInt(infoVal, 16); break;
-            case '2b': additionalInfo.analog_data = parseInt(infoVal, 16); break;
+            case '2b': {
+                // Analog inputs: 4 bytes → AD0 (bits 0‑15) and AD1 (bits 16‑31)
+                const analog32 = parseInt(infoVal, 16);
+                const ad0 = analog32 & 0xFFFF;               // low 16 bits
+                const ad1 = (analog32 >> 16) & 0xFFFF;       // high 16 bits
+
+                // Convert to voltage assuming 0‑5V reference (0x0000 = 0V, 0xFFFF = 5V)
+                const voltage0 = (ad0 / 65535) * 5;
+                const voltage1 = (ad1 / 65535) * 5;
+
+                // Store structured data for easy access
+                additionalInfo.analog_inputs = {
+                  ad0,
+                  ad1,
+                  voltage0,
+                  voltage1,
+                };
+                // Keep the raw 32‑bit value for backward compatibility
+                additionalInfo.analog_data = analog32;
+
+                logger.debug(`Analog inputs: AD0=${ad0} (${voltage0.toFixed(3)}V), AD1=${ad1} (${voltage1.toFixed(3)}V)`);
+                break;
+              }
             default: additionalInfo[infoId] = infoVal;
         }
         remaining = remaining.substring(4 + infoLen);
