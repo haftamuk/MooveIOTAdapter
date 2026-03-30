@@ -3,6 +3,7 @@ const net = require('net');
 const fs = require('fs');
 const path = require('path');
 const jt808Parser = require('./lib/jt808_command_parser');
+const gt06Parser = require('./lib/gt06_command_parser');
 
 const environment = process.env.NODE_ENV || 'development';
 const envFile = `.env.${environment}`;
@@ -97,26 +98,37 @@ class ProxyTarget {
       }
     });
 
-this.socket.on('data', (data) => {
-  this.log(`Received ${data.length} bytes: ${data.toString('hex')}`);
+    this.socket.on('data', (data) => {
+      this.log(`Received ${data.length} bytes: ${data.toString('hex')}`);
 
-  // For UT04S devices, attempt to parse and interpret the JT808 packet
-  if (this.serverType === 'ut04s') {
-    const parsed = jt808Parser.parseJT808Packet(data);
-    if (parsed && parsed.interpretation) {
-      const { type, commandName } = parsed.classification;
-      if (type === 'command') {
-        // This is a server‑initiated command – log full interpretation
-        this.log(`Command from server (${commandName}): ${parsed.interpretation}`);
-      } else {
-        // This is a response to a device message – log briefly
-        this.log(`Response from server (${commandName}) – raw hex: ${data.toString('hex')}`);
+      // For UT04S devices, attempt to parse and interpret the JT808 packet
+      if (this.serverType === 'ut04s') {
+        const parsed = jt808Parser.parseJT808Packet(data);
+        if (parsed && parsed.interpretation) {
+          const { type, commandName } = parsed.classification;
+          if (type === 'command') {
+            this.log(`Command from server (${commandName}): ${parsed.interpretation}`);
+          } else {
+            this.log(`Response from server (${commandName}) – raw hex: ${data.toString('hex')}`);
+          }
+        } else if (parsed === null) {
+          this.log('(Could not parse as JT808 packet)');
+        }
       }
-    } else if (parsed === null) {
-      this.log('(Could not parse as JT808 packet)');
-    }
-  }
-});
+      // For GT06 devices, attempt to parse and interpret the GT06 packet
+      else if (this.serverType === 'gt06') {
+        const parsed = gt06Parser.parseGT06Packet(data);
+        if (parsed && parsed.interpretation) {
+          if (parsed.type === 'command') {
+            this.log(`Command from server (${parsed.commandName}): ${parsed.interpretation}`);
+          } else {
+            this.log(`Response from server (${parsed.commandName}) – raw hex: ${data.toString('hex')}`);
+          }
+        } else if (parsed === null) {
+          this.log('(Could not parse as GT06 packet)');
+        }
+      }
+    });
 
     this.socket.on('error', (err) => {
       proxyLogger.error(
