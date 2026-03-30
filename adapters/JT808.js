@@ -413,7 +413,10 @@ const adapter = function (device) {
 
         switch (infoId) {
             case '01': additionalInfo.mileage = parseInt(infoVal, 16) / 10; break;
-            case '02': additionalInfo.fuel = parseInt(infoVal, 16) / 10; break;
+            /**
+             * The last division by 10 is to scale incoming input to actual voltage reading ranging 0 - 5 Volt
+             */
+            case '02': additionalInfo.fuel = (parseInt(infoVal, 16) / 10) / 10; break;
             case '03': additionalInfo.driving_speed = parseInt(infoVal, 16) / 10; break;
             case '25': additionalInfo.vehicle_signals = parseInt(infoVal, 16); break;
             case '30': additionalInfo.gsm_signal = parseInt(infoVal, 16); break;
