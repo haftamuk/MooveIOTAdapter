@@ -2,6 +2,7 @@
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const jt808Parser = require('./lib/jt808_command_parser');
 
 const environment = process.env.NODE_ENV || 'development';
 const envFile = `.env.${environment}`;
@@ -35,11 +36,12 @@ const API_ENDPOINTS = {
 // ============================================================================
 
 class ProxyTarget {
-  constructor(deviceId, host, port, targetType, debugStream = null) {
+  constructor(deviceId, host, port, targetType, serverType, debugStream = null) {
     this.deviceId = deviceId;
     this.host = host;
     this.port = port;
     this.targetType = targetType; // 'crs' or 'gpspos'
+    this.serverType = serverType;   // 'ut04s' or 'gt06' – for interpretation
     this.socket = null;
     this.queue = [];
     this.connecting = false;
@@ -96,8 +98,18 @@ class ProxyTarget {
     });
 
     this.socket.on('data', (data) => {
+      proxyLogger.debug(`Command Interpretation: Received ${data.length} bytes: ${data.toString('hex')}`);
       this.log(`Received ${data.length} bytes: ${data.toString('hex')}`);
-      // You can handle responses here if needed, e.g., forward back to device
+
+      // For UT04S devices, attempt to parse and interpret the JT808 command
+      if (this.serverType === 'ut04s') {
+        const parsed = jt808Parser.parseJT808Packet(data);
+        if (parsed && parsed.interpretation) {
+          this.log(`Command Interpretation: ${parsed.interpretation}`);
+        } else if (parsed === null) {
+          this.log('(Could not parse as JT808 packet)');
+        }
+      }
     });
 
     this.socket.on('error', (err) => {
@@ -231,7 +243,8 @@ function getProxyManager(device, targetType, serverType) {
     }
 
     const debugStream = device.getDebugStream(); // may be null
-    managers[targetType] = new ProxyTarget(deviceId, host, port, targetType, debugStream);
+    // Pass serverType to ProxyTarget constructor
+    managers[targetType] = new ProxyTarget(deviceId, host, port, targetType, serverType, debugStream);
     proxyLogger.info(
       `Created proxy manager for device ${deviceId}, target=${targetType}, serverType=${serverType} -> ${host}:${port}`
     );
