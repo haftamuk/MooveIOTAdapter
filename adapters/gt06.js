@@ -533,12 +533,66 @@ var adapter = function (device) {
     logger.debug(`synchronous_clock called (not implemented)`);
   };
 
+  // ------------------------------------------------------------------------
+  // G61‑specific string information parsing (protocol 0x15)
+  // ------------------------------------------------------------------------
+  this.parse_string_info = function (dataBodyHex) {
+    if (!dataBodyHex || dataBodyHex.length === 0) {
+      return null;
+    }
+
+    try {
+      const ascii = Buffer.from(dataBodyHex, 'hex').toString('utf8').replace(/\r/g, '');
+      const lines = ascii.split('\n');
+      let imei = null;
+      let lat = null;
+      let lng = null;
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('IMEI:')) {
+          imei = trimmed.substring(5).trim();
+        } else if (trimmed.startsWith('http://maps.google.com/maps?q=')) {
+          const coordsPart = trimmed.split('?q=')[1];
+          if (coordsPart) {
+            const parts = coordsPart.split(',');
+            if (parts.length === 2) {
+              lat = parseFloat(parts[0].replace(/[^0-9.\-]/g, ''));
+              lng = parseFloat(parts[1].replace(/[^0-9.\-]/g, ''));
+            }
+          }
+        }
+      }
+
+      if (imei || lat || lng) {
+        return { imei, latitude: lat, longitude: lng };
+      }
+    } catch (e) {
+      logger.error('Error parsing string info:', e);
+    }
+    return null;
+  };
+
   /**
    * run_other – handles any protocol not explicitly mapped.
-   * Sends a generic acknowledgment to keep the connection alive.
+   * For string information (protocol 15) it extracts the IMEI and updates
+   * the device UID if necessary.
    */
   this.run_other = function (cmd, msg_parts) {
     logger.info(`[GT06] run_other called with cmd: ${cmd}, protocol: 0x${msg_parts.protocol_id}`);
+
+    // Special handling for string information (G61 and similar devices)
+    if (msg_parts.protocol_id === '15' && msg_parts.data_body) {
+      const info = this.parse_string_info(msg_parts.data_body);
+      if (info && info.imei) {
+        const currentUid = this.device.getUID();
+        if (currentUid !== info.imei) {
+          logger.info(`[GT06] Updating device UID from "${currentUid}" to real IMEI "${info.imei}"`);
+          this.device.setUID(info.imei);
+        }
+      }
+    }
+
     const serial = msg_parts.serial_number || '0001';
     const protocol = msg_parts.protocol_id;
     if (protocol) {
